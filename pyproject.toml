@@ -1,0 +1,7 @@
+[project]
+name = "msc-thesis-code"
+version = "0.1.0"
+description = "MSc Thesis Code"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
