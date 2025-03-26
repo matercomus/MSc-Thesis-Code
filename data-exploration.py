@@ -72,5 +72,20 @@ def _(mo, top_license_plates_df):
     return
 
 
+@app.cell
+def _(ldf, mo, pl):
+    column_names = ldf.collect_schema().names()
+    mo.vstack([
+        mo.Html("<h2>Column Names</h2>"),
+        pl.DataFrame({"Column Names": column_names})
+    ])
+    return (column_names,)
+
+
+@app.cell
+def _():
+    return
+
+
 if __name__ == "__main__":
     app.run()
