@@ -24,7 +24,7 @@ def _(pl):
 @app.cell
 def _(ldf):
     # Value counts for occupancy_status (as before)
-    occupancy_counts_ldf = ldf.group_by("occupancy_status").count()
+    occupancy_counts_ldf = ldf.group_by("occupancy_status").len()
     occupancy_counts_df = occupancy_counts_ldf.collect()
     return occupancy_counts_df, occupancy_counts_ldf
 
@@ -58,7 +58,7 @@ def _(mo, timestamp_stats_df):
 @app.cell
 def _(ldf):
     # Value counts for license_plate (showing top 10 for brevity - can be memory intensive for many unique plates)
-    top_license_plates_ldf = ldf.group_by("license_plate").count().sort("count", descending=True).limit(10)
+    top_license_plates_ldf = ldf.group_by("license_plate").len().sort("len", descending=True).limit(10)
     top_license_plates_df = top_license_plates_ldf.collect()
     return top_license_plates_df, top_license_plates_ldf
 
