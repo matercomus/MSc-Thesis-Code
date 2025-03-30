@@ -66,5 +66,30 @@ def _(summary_df_lp_filtered):
     return
 
 
+@app.cell
+def _(ldf_lp_filtered):
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+
+    # Efficiently aggregate timestamp counts using Polars
+    timestamp_counts = ldf_lp_filtered.group_by("timestamp").len().collect()
+
+    # Convert the aggregated Polars DataFrame to Pandas for Seaborn
+    df_timestamp_counts = timestamp_counts.to_pandas()
+    return df_timestamp_counts, plt, sns, timestamp_counts
+
+
+@app.cell
+def _(df_timestamp_counts, plt, sns):
+    sns.histplot(data=df_timestamp_counts, x='timestamp', weights='count')
+    plt.gca()
+    return
+
+
+@app.cell
+def _():
+    return
+
+
 if __name__ == "__main__":
     app.run()
