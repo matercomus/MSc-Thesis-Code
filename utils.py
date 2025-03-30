@@ -9,23 +9,26 @@ def filter_chinese_license_plates(
     col: str = "license_plate",
 ) -> pl.LazyFrame:
     """Filters Chinese license plates following official standards."""
+    # Temporarily cast to string for filtering
+    string_col = pl.col(col).cast(pl.Utf8)
+
     # First validate the original plate (case-sensitive check)
     is_valid = (
         # Standard plates (7 characters)
         (
-            (pl.col(col).str.len_chars() == 7)
-            & (pl.col(col).str.slice(0, 1).str.contains(r"[\u4e00-\u9fa5]"))
-            & (pl.col(col).str.slice(1, 1).str.contains(r"[A-HJ-NP-Z]"))
-            & (pl.col(col).str.slice(2, 5).str.contains(r"^[A-HJ-NP-Z0-9]{5}$"))
+            (string_col.str.len_chars() == 7)
+            & (string_col.str.slice(0, 1).str.contains(r"[\u4e00-\u9fa5]"))
+            & (string_col.str.slice(1, 1).str.contains(r"[A-HJ-NP-Z]"))
+            & (string_col.str.slice(2, 5).str.contains(r"^[A-HJ-NP-Z0-9]{5}$"))
         )
         |
         # New energy plates (8 characters, ends with D/F - uppercase only)
         (
-            (pl.col(col).str.len_chars() == 8)
-            & (pl.col(col).str.slice(0, 1).str.contains(r"[\u4e00-\u9fa5]"))
-            & (pl.col(col).str.slice(1, 1).str.contains(r"[A-HJ-NP-Z]"))
-            & (pl.col(col).str.slice(2, 5).str.contains(r"^[A-HJ-NP-Z0-9]{5}$"))
-            & (pl.col(col).str.slice(7, 1).str.contains(r"[DF]$"))
+            (string_col.str.len_chars() == 8)
+            & (string_col.str.slice(0, 1).str.contains(r"[\u4e00-\u9fa5]"))
+            & (string_col.str.slice(1, 1).str.contains(r"[A-HJ-NP-Z]"))
+            & (string_col.str.slice(2, 5).str.contains(r"^[A-HJ-NP-Z0-9]{5}$"))
+            & (string_col.str.slice(7, 1).str.contains(r"[DF]$"))
         )
     )
 
@@ -39,7 +42,16 @@ def profile_data(
     Profile a Polars LazyFrame and return summary statistics with empty DataFrame handling.
     """
     try:
-        schema = ldf.collect_schema()
+        schema_before_potential_cast = ldf.collect_schema()
+        temp_ldf = ldf
+
+        if (
+            "license_plate" in schema_before_potential_cast
+            and schema_before_potential_cast["license_plate"] == pl.Categorical
+        ):
+            temp_ldf = ldf.with_columns(pl.col("license_plate").cast(pl.Utf8))
+
+        schema = temp_ldf.collect_schema()
         column_names = columns or schema.names()
 
         missing_cols = set(column_names) - set(schema.names())
@@ -68,7 +80,7 @@ def profile_data(
                     ]
                 )
 
-        result = ldf.select(selections).collect()
+        result = temp_ldf.select(selections).collect()
         if result.is_empty():
             total_rows = 0
             row_data = {k: None for k in result.columns}
@@ -104,14 +116,14 @@ def profile_data(
             if verbose:
                 print(f"📊 {col} ({stats['dtype']})")
                 print(
-                    f"   Missing: {stats['missing_count']} ({stats['missing_%']:.1f}%)"
+                    f"  Missing: {stats['missing_count']} ({stats['missing_%']:.1f}%)"
                 )
-                print(f"   Unique: {stats['unique']}")
+                print(f"  Unique: {stats['unique']}")
                 if "mean" in stats:
                     mean = stats["mean"] or 0  # Handle None
                     std = stats["std"] or 0
-                    print(f"   Mean: {mean:.2f} ± {std:.2f}")
-                print(f"   Range: [{stats['min']} → {stats['max']}]\n")
+                    print(f"  Mean: {mean:.2f} ± {std:.2f}")
+                print(f"  Range: [{stats['min']} → {stats['max']}]\n")
 
         summary_data = {
             "column": column_names,
