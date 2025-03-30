@@ -5,24 +5,25 @@ import pytest
 from utils import filter_chinese_license_plates
 
 TEST_DATA = [
-    ("京A12345", True),  # Standard valid plate (7 chars)
-    ("粤B12345", True),  # Standard valid plate (7 chars)
-    ("沪D1234F", True),  # Standard valid plate (7 chars)
-    ("津C5678D", True),  # New energy valid plate (8 chars)
-    ("京BU0330", True),  # Valid standard plate (7 chars)
-    ("京BU0330??2019-11-25 23:56:43", False),  # Invalid - extra chars
-    ("京I12345", False),  # Invalid - contains I
-    ("京O12345", False),  # Invalid - contains O
-    ("京A1234", False),  # Invalid - too short (6 chars)
-    ("京A123456", False),  # Invalid - too long (9 chars)
-    ("A12345", False),  # Invalid - missing Chinese char
-    ("京a12345", False),  # Invalid - lowercase letter
-    ("京A1234E", True),  # Valid standard plate (7 chars, ends with E)
-    (
-        "京A1234d",
-        True,
-    ),  # Valid new energy - lowercase d
-    ("", False),  # Invalid - empty string
+    # Valid Standard Plates (7 characters)
+    ("京A12345", True),
+    ("粤B12345", True),
+    ("沪D1234F", True),  # F is allowed in standard plates
+    ("京BU0330", True),
+    ("京A1234E", True),  # E is allowed in standard plates
+    # Valid New Energy Plates (8 characters)
+    ("津C5678D", True),
+    ("粤BD1234F", True),
+    # Invalid Plates
+    ("京A1234d", False),  # lowercase d in standard plate
+    ("京a12345", False),  # lowercase province code
+    ("京I12345", False),  # contains I
+    ("京O12345", False),  # contains O
+    ("京A1234", False),  # too short
+    ("京A123456", False),  # too long
+    ("A12345", False),  # missing Chinese character
+    ("京BU0330??2019-11-25 23:56:43", False),  # extra characters
+    ("", False),  # empty string
 ]
 
 
@@ -37,13 +38,11 @@ def test_filter_chinese_license_plates(test_df):
     """Test the license plate filtering function"""
     filtered = filter_chinese_license_plates(test_df).collect()
 
-    # Get the expected valid plates
     expected_valid = [plate for plate, is_valid in TEST_DATA if is_valid]
-
-    # Verify all valid plates are included
     result_plates = filtered["license_plate"].to_list()
+
+    # Check all expected plates are present
     assert sorted(result_plates) == sorted(expected_valid)
-    assert len(result_plates) == len(expected_valid)
 
 
 def test_filter_with_different_column_name():
@@ -69,12 +68,3 @@ def test_non_string_columns():
     filtered = filter_chinese_license_plates(ldf).collect()
     assert filtered.shape[0] == 1
     assert filtered["license_plate"].to_list() == ["京A12345"]
-
-
-def test_case_sensitivity():
-    """Test that new energy plates ending with D/d are accepted"""
-    data = {"license_plate": ["京A1234D", "京B5678d"]}
-    ldf = pl.LazyFrame(data, schema={"license_plate": pl.String})
-    filtered = filter_chinese_license_plates(ldf).collect()
-    assert filtered.shape[0] == 2
-    assert set(filtered["license_plate"].to_list()) == {"京A1234D", "京B5678d"}

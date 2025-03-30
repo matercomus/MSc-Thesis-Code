@@ -8,33 +8,28 @@ def filter_chinese_license_plates(
     lazy_df: pl.LazyFrame,
     col: str = "license_plate",
 ) -> pl.LazyFrame:
-    """
-    Filters Chinese license plates with strict validation:
-    - Standard plates: 1 Chinese char + uppercase letter + 5 alphanumerics (7 chars total)
-    - New energy plates: 1 Chinese char + uppercase letter + 4 alphanumerics + D/d (8 chars total)
-    - Excludes I and O to avoid confusion with numbers
-    """
-    # Handle potential null values first
-    not_null = pl.col(col).is_not_null()
-
-    # Standard plate pattern - must be exactly 7 characters
-    # First char must be Chinese, second must be uppercase letter (excluding I and O),
-    # remaining 5 must be alphanumeric (excluding I and O)
-    standard_pattern = r"^[\u4e00-\u9fa5][A-HJ-NP-Z][A-HJ-NP-Z0-9]{5}$"
-
-    # New energy plate pattern - must be exactly 8 characters
-    # First char must be Chinese, second must be uppercase letter (excluding I and O),
-    # next 4 must be alphanumeric (excluding I and O), last must be D or d
-    new_energy_pattern = r"^[\u4e00-\u9fa5][A-HJ-NP-Z][A-HJ-NP-Z0-9]{4}[Dd]$"
-
-    # Combine conditions
-    return lazy_df.filter(
-        not_null
-        & (
-            pl.col(col).cast(pl.String).str.contains(standard_pattern)
-            | pl.col(col).cast(pl.String).str.contains(new_energy_pattern)
+    """Filters Chinese license plates following official standards."""
+    # First validate the original plate (case-sensitive check)
+    is_valid = (
+        # Standard plates (7 characters)
+        (
+            (pl.col(col).str.len_chars() == 7)
+            & (pl.col(col).str.slice(0, 1).str.contains(r"[\u4e00-\u9fa5]"))
+            & (pl.col(col).str.slice(1, 1).str.contains(r"[A-HJ-NP-Z]"))
+            & (pl.col(col).str.slice(2, 5).str.contains(r"^[A-HJ-NP-Z0-9]{5}$"))
+        )
+        |
+        # New energy plates (8 characters, ends with D/F - uppercase only)
+        (
+            (pl.col(col).str.len_chars() == 8)
+            & (pl.col(col).str.slice(0, 1).str.contains(r"[\u4e00-\u9fa5]"))
+            & (pl.col(col).str.slice(1, 1).str.contains(r"[A-HJ-NP-Z]"))
+            & (pl.col(col).str.slice(2, 5).str.contains(r"^[A-HJ-NP-Z0-9]{5}$"))
+            & (pl.col(col).str.slice(7, 1).str.contains(r"[DF]$"))
         )
     )
+
+    return lazy_df.filter(pl.col(col).is_not_null() & is_valid)
 
 
 def profile_data(
