@@ -12,11 +12,11 @@ def _(mo):
 
         ## Todo:
 
-        - [ ] Missing values
+        - [x] Missing values
         - [ ] Remove outliers (Timestamp and license plates)
         - [ ] Exclude data outside Beijing
         - [ ] Calc velocity
-        - [ ] Len, Min, Max, Mean
+        - [x] Len, Min, Max, Mean
         - [ ] Plots
         """
     )
@@ -32,37 +32,32 @@ def _():
 
 
 @app.cell
-def _(pl):
+def _(filter_chinese_license_plates, pl, profile_data):
     # File path to your Parquet file
     parquet_file_path = "2019.11.25.parquet"
 
     # Load the Parquet file lazily using Polars
     ldf = pl.scan_parquet(parquet_file_path)
-    return ldf, parquet_file_path
 
-
-@app.cell
-def _(ldf, profile_data):
     summary_df, _ = profile_data(ldf)
-    return (summary_df,)
+
+    ldf_lp_filtered = filter_chinese_license_plates(ldf)
+    summary_df_lp_filtered, _ = profile_data(ldf_lp_filtered)
+
+    del ldf
+    return (
+        ldf,
+        ldf_lp_filtered,
+        parquet_file_path,
+        summary_df,
+        summary_df_lp_filtered,
+    )
 
 
 @app.cell
 def _(summary_df):
     summary_df
     return
-
-
-@app.cell
-def _(filter_chinese_license_plates, ldf):
-    ldf_lp_filtered = filter_chinese_license_plates(ldf)
-    return (ldf_lp_filtered,)
-
-
-@app.cell
-def _(ldf_lp_filtered, profile_data):
-    summary_df_lp_filtered, _ = profile_data(ldf_lp_filtered)
-    return (summary_df_lp_filtered,)
 
 
 @app.cell
