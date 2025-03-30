@@ -169,3 +169,12 @@ def profile_data(
 
     except Exception as e:
         raise RuntimeError(f"Data profiling failed: {str(e)}") from e
+
+
+def filter_by_year(
+    lazy_df: pl.LazyFrame,
+    timestamp_col: str = "timestamp",
+    correct_year: int = 2019,
+) -> pl.LazyFrame:
+    """Filters rows where the year of the timestamp column matches the correct year."""
+    return lazy_df.filter(pl.col(timestamp_col).dt.year() == correct_year)

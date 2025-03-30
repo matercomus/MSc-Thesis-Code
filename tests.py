@@ -2,7 +2,8 @@
 
 import polars as pl
 import pytest
-from utils import filter_chinese_license_plates
+from datetime import datetime
+from utils import filter_chinese_license_plates, filter_by_year
 
 TEST_DATA = [
     # Valid Standard Plates (7 characters)
@@ -68,3 +69,37 @@ def test_non_string_columns():
     filtered = filter_chinese_license_plates(ldf).collect()
     assert filtered.shape[0] == 1
     assert filtered["license_plate"].to_list() == ["京A12345"]
+
+
+def test_filter_by_year():
+    data = [
+        {"timestamp": datetime(2023, 1, 1)},
+        {"timestamp": datetime(2024, 5, 15)},
+        {"timestamp": datetime(2024, 12, 31)},
+        {"timestamp": datetime(2025, 3, 1)},
+    ]
+    df = pl.DataFrame(data)
+    lazy_df = df.lazy()
+    timestamp_col = "timestamp"
+    correct_year = 2024
+
+    filtered_lazy_df = filter_by_year(lazy_df, timestamp_col, correct_year)
+    filtered_df = filtered_lazy_df.collect()
+
+    assert filtered_df.shape[0] == 2
+    assert all(row["timestamp"].year == correct_year for row in filtered_df.to_dicts())
+
+    correct_year_2 = 2023
+    filtered_lazy_df_2 = filter_by_year(lazy_df, timestamp_col, correct_year_2)
+    filtered_df_2 = filtered_lazy_df_2.collect()
+
+    assert filtered_df_2.shape[0] == 1
+    assert all(
+        row["timestamp"].year == correct_year_2 for row in filtered_df_2.to_dicts()
+    )
+
+    correct_year_3 = 2026
+    filtered_lazy_df_3 = filter_by_year(lazy_df, timestamp_col, correct_year_3)
+    filtered_df_3 = filtered_lazy_df_3.collect()
+
+    assert filtered_df_3.shape[0] == 0
