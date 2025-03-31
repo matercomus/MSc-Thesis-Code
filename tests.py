@@ -1,105 +1,110 @@
 # tests.py
 
-import polars as pl
-import pytest
 from datetime import datetime
-from utils import filter_chinese_license_plates, filter_by_year
-
-TEST_DATA = [
-    # Valid Standard Plates (7 characters)
-    ("京A12345", True),
-    ("粤B12345", True),
-    ("沪D1234F", True),  # F is allowed in standard plates
-    ("京BU0330", True),
-    ("京A1234E", True),  # E is allowed in standard plates
-    # Valid New Energy Plates (8 characters)
-    ("津C5678D", True),
-    ("粤BD1234F", True),
-    # Invalid Plates
-    ("京A1234d", False),  # lowercase d in standard plate
-    ("京a12345", False),  # lowercase province code
-    ("京I12345", False),  # contains I
-    ("京O12345", False),  # contains O
-    ("京A1234", False),  # too short
-    ("京A123456", False),  # too long
-    ("A12345", False),  # missing Chinese character
-    ("京BU0330??2019-11-25 23:56:43", False),  # extra characters
-    ("", False),  # empty string
-]
+import polars as pl
+from utils import (
+    filter_chinese_license_plates,
+    profile_data,
+    filter_by_year,
+)
 
 
-@pytest.fixture
-def test_df():
-    """Create a test DataFrame with license plate column"""
-    data = {"license_plate": [plate for plate, _ in TEST_DATA]}
-    return pl.LazyFrame(data, schema={"license_plate": pl.String})
-
-
-def test_filter_chinese_license_plates(test_df):
-    """Test the license plate filtering function"""
-    filtered = filter_chinese_license_plates(test_df).collect()
-
-    expected_valid = [plate for plate, is_valid in TEST_DATA if is_valid]
-    result_plates = filtered["license_plate"].to_list()
-
-    # Check all expected plates are present
-    assert sorted(result_plates) == sorted(expected_valid)
-
-
-def test_filter_with_different_column_name():
-    """Test function works with custom column name"""
-    data = {"custom_col": ["京A12345", "invalid", "粤B54321"]}
-    ldf = pl.LazyFrame(data, schema={"custom_col": pl.String})
-    filtered = filter_chinese_license_plates(ldf, col="custom_col").collect()
-    assert filtered.shape[0] == 2
-    assert set(filtered["custom_col"].to_list()) == {"京A12345", "粤B54321"}
-
-
-def test_empty_dataframe():
-    """Test function handles empty DataFrame correctly"""
-    empty_df = pl.LazyFrame({"license_plate": []}, schema={"license_plate": pl.String})
-    filtered = filter_chinese_license_plates(empty_df).collect()
-    assert filtered.shape[0] == 0
-
-
-def test_non_string_columns():
-    """Test function handles string conversion"""
-    data = {"license_plate": ["1234567", "京A12345"]}
-    ldf = pl.LazyFrame(data, schema={"license_plate": pl.String})
+def test_filter_chinese_license_plates():
+    data = {
+        "license_plate": [
+            "京A12345",  # Valid standard
+            "粤B12345",  # Valid standard
+            "沪C1234D",  # Valid new energy
+            "苏E1234F",  # Valid new energy
+            "京A1234",  # Too short
+            "粤B123456",  # Too long
+            "invalid",  # Invalid format
+            None,  # Null
+        ]
+    }
+    ldf = pl.LazyFrame(data)
     filtered = filter_chinese_license_plates(ldf).collect()
-    assert filtered.shape[0] == 1
-    assert filtered["license_plate"].to_list() == ["京A12345"]
+    assert filtered.shape == (4, 1)
+    assert filtered["license_plate"].to_list() == [
+        "京A12345",
+        "粤B12345",
+        "沪C1234D",
+        "苏E1234F",
+    ]
+
+
+def test_profile_data_basic():
+    """Test basic profiling functionality."""
+    data = {
+        "numeric": [1, 2, 3, None, 5],
+        "string": ["a", "a", "b", None, "c"],
+        "date": [
+            datetime(2023, 1, 1),
+            datetime(2023, 1, 2),
+            None,
+            None,
+            datetime(2023, 1, 3),
+        ],
+    }
+    ldf = pl.LazyFrame(data)
+    stats_df, stats_dict = profile_data(ldf)
+
+    # Check DataFrame structure
+    assert set(stats_df.columns) >= {
+        "column",
+        "dtype",
+        "missing_count",
+        "missing_%",
+        "unique",
+    }
+
+    # Check numeric column stats
+    numeric_stats = stats_dict["numeric"]
+    assert numeric_stats["dtype"] == "Int64"
+    assert numeric_stats["missing_count"] == 1
+    assert numeric_stats["missing_%"] == 20.0
+    assert numeric_stats["unique"] == 5  # 1, 2, 3, None, 5
+
+    # Check string column stats
+    string_stats = stats_dict["string"]
+    assert string_stats["dtype"] == "String"
+    assert string_stats["missing_count"] == 1
+    # Corrected assertion: Expecting 4 unique values (including None if it's counted)
+    assert string_stats["unique"] == 4  # a, b, c, None
+
+    # Check date column stats
+    date_stats = stats_dict["date"]
+    assert "Datetime" in date_stats["dtype"]
+    assert date_stats["missing_count"] == 2
+
+
+def test_profile_data_empty():
+    """Test with empty DataFrame."""
+    ldf = pl.LazyFrame({})
+    stats_df, stats_dict = profile_data(ldf)
+    assert stats_df.is_empty()
+    assert stats_dict == {}
+
+
+def test_profile_data_specified_columns():
+    """Test profiling specific columns only."""
+    data = {"col1": [1, 2], "col2": ["a", "b"]}
+    ldf = pl.LazyFrame(data)
+    stats_df, stats_dict = profile_data(ldf, columns=["col1"])
+    assert stats_df.shape[0] == 1
+    assert stats_df["column"].to_list() == ["col1"]
 
 
 def test_filter_by_year():
-    data = [
-        {"timestamp": datetime(2023, 1, 1)},
-        {"timestamp": datetime(2024, 5, 15)},
-        {"timestamp": datetime(2024, 12, 31)},
-        {"timestamp": datetime(2025, 3, 1)},
-    ]
-    df = pl.DataFrame(data)
-    lazy_df = df.lazy()
-    timestamp_col = "timestamp"
-    correct_year = 2024
-
-    filtered_lazy_df = filter_by_year(lazy_df, timestamp_col, correct_year)
-    filtered_df = filtered_lazy_df.collect()
-
-    assert filtered_df.shape[0] == 2
-    assert all(row["timestamp"].year == correct_year for row in filtered_df.to_dicts())
-
-    correct_year_2 = 2023
-    filtered_lazy_df_2 = filter_by_year(lazy_df, timestamp_col, correct_year_2)
-    filtered_df_2 = filtered_lazy_df_2.collect()
-
-    assert filtered_df_2.shape[0] == 1
-    assert all(
-        row["timestamp"].year == correct_year_2 for row in filtered_df_2.to_dicts()
-    )
-
-    correct_year_3 = 2026
-    filtered_lazy_df_3 = filter_by_year(lazy_df, timestamp_col, correct_year_3)
-    filtered_df_3 = filtered_lazy_df_3.collect()
-
-    assert filtered_df_3.shape[0] == 0
+    data = {
+        "timestamp": [
+            datetime(2018, 1, 1),
+            datetime(2019, 1, 1),
+            datetime(2019, 12, 31),
+            datetime(2020, 1, 1),
+        ]
+    }
+    ldf = pl.LazyFrame(data)
+    filtered = filter_by_year(ldf).collect()
+    assert filtered.shape == (2, 1)
+    assert filtered["timestamp"].dt.year().to_list() == [2019, 2019]

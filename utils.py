@@ -9,10 +9,8 @@ def filter_chinese_license_plates(
     col: str = "license_plate",
 ) -> pl.LazyFrame:
     """Filters Chinese license plates following official standards."""
-    # Temporarily cast to string for filtering
     string_col = pl.col(col).cast(pl.Utf8)
 
-    # First validate the original plate (case-sensitive check)
     is_valid = (
         # Standard plates (7 characters)
         (
@@ -22,150 +20,77 @@ def filter_chinese_license_plates(
             & (string_col.str.slice(2, 5).str.contains(r"^[A-HJ-NP-Z0-9]{5}$"))
         )
         |
-        # New energy plates (8 characters, ends with D/F - uppercase only)
+        # New energy plates (8 characters)
         (
             (string_col.str.len_chars() == 8)
             & (string_col.str.slice(0, 1).str.contains(r"[\u4e00-\u9fa5]"))
             & (string_col.str.slice(1, 1).str.contains(r"[A-HJ-NP-Z]"))
-            & (string_col.str.slice(2, 5).str.contains(r"^[A-HJ-NP-Z0-9]{5}$"))
+            & (
+                string_col.str.slice(2, 6).str.contains(r"^[A-HJ-NP-Z0-9]{5}$")
+            )  # Corrected slice
             & (string_col.str.slice(7, 1).str.contains(r"[DF]$"))
         )
     )
-
     return lazy_df.filter(pl.col(col).is_not_null() & is_valid)
 
 
 def profile_data(
-    ldf: pl.LazyFrame, columns: Optional[List[str]] = None, verbose: bool = False
+    ldf: pl.LazyFrame, columns: Optional[List[str]] = None
 ) -> Tuple[pl.DataFrame, Dict]:
     """
-    Profile a Polars LazyFrame and return summary statistics with empty DataFrame handling.
+    Simple data profiling using Polars built-ins.
+    Returns:
+        - DataFrame with basic statistics
+        - Dictionary with additional metrics
     """
     try:
-        schema_before_potential_cast = ldf.collect_schema()
-        temp_ldf = ldf
+        df = ldf.collect()
 
-        if (
-            "license_plate" in schema_before_potential_cast
-            and schema_before_potential_cast["license_plate"] == pl.Categorical
-        ):
-            temp_ldf = ldf.with_columns(pl.col("license_plate").cast(pl.Utf8))
+        # Handle empty DataFrame
+        if df.is_empty() or len(df.columns) == 0:
+            return pl.DataFrame(), {}
 
-        schema = temp_ldf.collect_schema()
-        column_names = columns or schema.names()
+        # Select only specified columns if provided
+        if columns:
+            missing_cols = set(columns) - set(df.columns)
+            if missing_cols:
+                raise ValueError(f"Columns not found: {missing_cols}")
+            df = df.select(columns)
 
-        missing_cols = set(column_names) - set(schema.names())
-        if missing_cols:
-            raise ValueError(f"Columns not found: {missing_cols}")
+        # Get basic statistics
+        describe_df = df.describe()
 
-        selections = [pl.len().alias("total_rows")]
-        for col in column_names:
-            dtype = schema[col]
-            selections.extend(
-                [
-                    pl.col(col).null_count().alias(f"null_{col}"),
-                    pl.col(col).min().alias(f"min_{col}"),
-                    pl.col(col).max().alias(f"max_{col}"),
-                ]
-            )
-            if dtype in (pl.Categorical, pl.Date, pl.Datetime, pl.Duration, pl.Time):
-                selections.append(pl.col(col).n_unique().alias(f"unique_{col}"))
-            else:
-                selections.append(pl.col(col).approx_n_unique().alias(f"unique_{col}"))
-            if dtype.is_numeric():
-                selections.extend(
-                    [
-                        pl.col(col).mean().alias(f"mean_{col}"),
-                        pl.col(col).std().alias(f"std_{col}"),
-                    ]
-                )
-
-        result = temp_ldf.select(selections).collect()
-        if result.is_empty():
-            total_rows = 0
-            row_data = {k: None for k in result.columns}
-        else:
-            row_data = result.row(0, named=True)
-            total_rows = row_data.get("total_rows", 0)
-
-        stats_dict = {}
-        for col in column_names:
-            null_count = row_data.get(f"null_{col}", 0)
-            if total_rows == 0:
-                missing_pct = 100.0
-            else:
-                missing_pct = (null_count / total_rows) * 100
-
-            stats = {
-                "dtype": str(schema[col]),
-                "missing_count": null_count,
-                "missing_%": missing_pct,
-                "unique": row_data.get(f"unique_{col}"),
-                "min": row_data.get(f"min_{col}"),
-                "max": row_data.get(f"max_{col}"),
-            }
-            if schema[col].is_numeric():
-                stats.update(
-                    {
-                        "mean": row_data.get(f"mean_{col}"),
-                        "std": row_data.get(f"std_{col}"),
-                    }
-                )
-            stats_dict[col] = stats
-
-            if verbose:
-                print(f"📊 {col} ({stats['dtype']})")
-                print(
-                    f"  Missing: {stats['missing_count']} ({stats['missing_%']:.1f}%)"
-                )
-                print(f"  Unique: {stats['unique']}")
-                if "mean" in stats:
-                    mean = stats["mean"] or 0  # Handle None
-                    std = stats["std"] or 0
-                    print(f"  Mean: {mean:.2f} ± {std:.2f}")
-                print(f"  Range: [{stats['min']} → {stats['max']}]\n")
-
-        summary_data = {
-            "column": column_names,
-            "dtype": [stats["dtype"] for stats in stats_dict.values()],
-            "missing_count": [stats["missing_count"] for stats in stats_dict.values()],
-            "missing_%": [stats["missing_%"] for stats in stats_dict.values()],
-            "unique": [stats["unique"] for stats in stats_dict.values()],
-            "min": [
-                str(stats["min"]) if stats["min"] is not None else None
-                for stats in stats_dict.values()
-            ],
-            "max": [
-                str(stats["max"]) if stats["max"] is not None else None
-                for stats in stats_dict.values()
-            ],
-        }
-
-        numeric_stats = {
-            "mean": [stats.get("mean") for stats in stats_dict.values()],
-            "std": [stats.get("std") for stats in stats_dict.values()],
-        }
-
-        summary_df = pl.DataFrame(
-            {
-                **summary_data,
-                **{k: pl.Series(v, dtype=pl.Float64) for k, v in numeric_stats.items()},
-            }
-        ).select(
-            [
-                "column",
-                "dtype",
-                "missing_count",
-                "missing_%",
-                "unique",
-                "mean",
-                "std",
-                "min",
-                "max",
-            ]
+        # Get missing values stats
+        missing_stats = df.select(
+            pl.all().null_count().name.prefix("null_count_"),
+            (pl.all().null_count() / pl.len() * 100).name.prefix("null_pct_"),
         )
 
-        return summary_df, stats_dict
+        # Get unique counts
+        unique_stats = df.select(pl.all().n_unique())
+
+        # Combine into final output
+        stats = {}
+        for col in df.columns:
+            stats[col] = {
+                "dtype": str(df.schema[col]),
+                "missing_count": missing_stats[f"null_count_{col}"][0],
+                "missing_%": missing_stats[f"null_pct_{col}"][0],
+                "unique": unique_stats[col][0],
+            }
+
+            # Add describe stats
+            col_describe = describe_df.filter(pl.col("statistic") == col)
+            for stat in ["mean", "std", "min", "max", "median"]:
+                if stat in col_describe.columns:
+                    stats[col][stat] = col_describe[stat][0]
+
+        # Convert to DataFrame
+        stats_df = pl.DataFrame(
+            [{"column": col, **vals} for col, vals in stats.items()]
+        )
+
+        return stats_df, stats
 
     except Exception as e:
         raise RuntimeError(f"Data profiling failed: {str(e)}") from e
@@ -176,5 +101,5 @@ def filter_by_year(
     timestamp_col: str = "timestamp",
     correct_year: int = 2019,
 ) -> pl.LazyFrame:
-    """Filters rows where the year of the timestamp column matches the correct year."""
+    """Filters rows where the year matches specified year."""
     return lazy_df.filter(pl.col(timestamp_col).dt.year() == correct_year)
