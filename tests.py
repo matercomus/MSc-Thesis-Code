@@ -1,11 +1,12 @@
 # tests.py
 
-from datetime import datetime
+from datetime import datetime, date
 import polars as pl
+import pytest
 from utils import (
     filter_chinese_license_plates,
     profile_data,
-    filter_by_year,
+    filter_by_date,
 )
 
 
@@ -95,7 +96,7 @@ def test_profile_data_specified_columns():
     assert stats_df["column"].to_list() == ["col1"]
 
 
-def test_filter_by_year():
+def test_filter_by_date():
     data = {
         "timestamp": [
             datetime(2018, 1, 1),
@@ -105,6 +106,108 @@ def test_filter_by_year():
         ]
     }
     ldf = pl.LazyFrame(data)
-    filtered = filter_by_year(ldf).collect()
+    filtered = filter_by_date(ldf).collect()
     assert filtered.shape == (2, 1)
     assert filtered["timestamp"].dt.year().to_list() == [2019, 2019]
+
+
+def test_filter_by_date_range():
+    data = {
+        "timestamp": [
+            datetime(2019, 1, 1),
+            datetime(2019, 6, 15),
+            datetime(2019, 12, 31),
+            datetime(2020, 1, 1),
+        ]
+    }
+    ldf = pl.LazyFrame(data)
+    filtered = filter_by_date(
+        ldf,
+        start_date=datetime(2019, 6, 1),
+        end_date=datetime(2019, 6, 30),
+    ).collect()
+    assert filtered.shape == (1, 1)
+    assert filtered["timestamp"].to_list() == [datetime(2019, 6, 15)]
+
+
+def test_filter_by_single_day():
+    data = {
+        "timestamp": [
+            datetime(2019, 1, 1),
+            datetime(2019, 1, 2),
+            datetime(2019, 1, 3),
+        ]
+    }
+    ldf = pl.LazyFrame(data)
+    filtered = filter_by_date(
+        ldf,
+        start_date=datetime(2019, 1, 2),
+        end_date=datetime(2019, 1, 2),
+    ).collect()
+    assert filtered.shape == (1, 1)
+    assert filtered["timestamp"].to_list() == [datetime(2019, 1, 2)]
+
+
+def test_filter_by_month():
+    data = {
+        "timestamp": [
+            datetime(2019, 1, 1),
+            datetime(2019, 2, 1),
+            datetime(2019, 2, 15),
+            datetime(2019, 3, 1),
+        ]
+    }
+    ldf = pl.LazyFrame(data)
+    filtered = filter_by_date(
+        ldf,
+        start_date=datetime(2019, 2, 1),
+        end_date=datetime(2019, 2, 28),
+    ).collect()
+    assert filtered.shape == (2, 1)
+    assert filtered["timestamp"].to_list() == [
+        datetime(2019, 2, 1),
+        datetime(2019, 2, 15),
+    ]
+
+
+def test_filter_by_date_with_date_range():
+    data = {
+        "timestamp": [
+            datetime(2018, 12, 31),
+            datetime(2019, 1, 1),
+            datetime(2019, 12, 31),
+            datetime(2020, 1, 1),
+        ]
+    }
+    ldf = pl.LazyFrame(data)
+    filtered = filter_by_date(
+        ldf,
+        correct_year=2019,
+        start_date=datetime(2019, 1, 1),
+        end_date=datetime(2019, 12, 31),
+    ).collect()
+    assert filtered.shape == (2, 1)
+    assert filtered["timestamp"].to_list() == [
+        datetime(2019, 1, 1),
+        datetime(2019, 12, 31),
+    ]
+
+
+def test_filter_by_date_empty_dataframe():
+    ldf = pl.LazyFrame({"timestamp": []}, schema={"timestamp": pl.Datetime})
+    filtered = filter_by_date(ldf).collect()
+    assert filtered.is_empty()
+
+
+def test_filter_by_date_invalid_column():
+    ldf = pl.LazyFrame({"invalid_column": [1, 2, 3]})
+    with pytest.raises(ValueError, match="Column 'timestamp' not found in DataFrame"):
+        filter_by_date(ldf).collect()
+
+
+def test_filter_by_date_invalid_date_type():
+    ldf = pl.LazyFrame({"timestamp": ["not a date", "also not a date"]})
+    with pytest.raises(
+        ValueError, match="Column 'timestamp' must be a datetime or date type"
+    ):
+        filter_by_date(ldf).collect()

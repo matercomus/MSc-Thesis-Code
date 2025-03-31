@@ -89,12 +89,12 @@ def _(df_timestamp_counts, plt, sns):
 
 @app.cell
 def _(ldf_lp_filtered, profile_data):
-    from utils import filter_by_year
+    from utils import filter_by_date
 
-    ldf_lp_filtered_2019 = filter_by_year(ldf_lp_filtered, 2019)
+    ldf_lp_filtered_2019 = filter_by_date(ldf_lp_filtered, 2019)
     summary_df_lp_filtered_2019, _ = profile_data(ldf_lp_filtered_2019)
     summary_df_lp_filtered_2019
-    return filter_by_year, ldf_lp_filtered_2019, summary_df_lp_filtered_2019
+    return filter_by_date, ldf_lp_filtered_2019, summary_df_lp_filtered_2019
 
 
 @app.cell

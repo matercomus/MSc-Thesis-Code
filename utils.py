@@ -1,7 +1,8 @@
 # utils.py
 
 import polars as pl
-from typing import Dict, Tuple, Optional, List
+import datetime
+from typing import Dict, Tuple, Optional, List, Union
 
 
 def filter_chinese_license_plates(
@@ -96,23 +97,52 @@ def profile_data(
         raise RuntimeError(f"Data profiling failed: {str(e)}") from e
 
 
-def filter_by_year(
+def filter_by_date(
     lazy_df: pl.LazyFrame,
-    correct_year: int = 2019,
     timestamp_col: str = "timestamp",
+    correct_year: int = 2019,
+    start_date: Optional[Union[datetime.date, datetime.datetime]] = None,
+    end_date: Optional[Union[datetime.date, datetime.datetime]] = None,
 ) -> pl.LazyFrame:
     """
-    Filters rows where the year of a timestamp column matches the specified year.
+    Filters rows based on the timestamp column's year or a custom date range.
 
     Args:
         lazy_df: Input LazyFrame
-        correct_year: Target year (default: 2019)
         timestamp_col: Name of the timestamp column (default: "timestamp")
+        correct_year: Target year to filter by. Default is 2019. Ignored if start_date or end_date are provided.
+        start_date: Start of the date range (inclusive). If provided, overrides correct_year.
+        end_date: End of the date range (inclusive). If provided, overrides correct_year.
 
     Returns:
-        Filtered LazyFrame containing only rows from the target year
+        Filtered LazyFrame containing rows within the specified year or date range.
     """
-    if timestamp_col not in lazy_df.collect_schema().names():
+    # Validate timestamp column
+    schema = lazy_df.collect_schema()
+    if timestamp_col not in schema:
         raise ValueError(f"Column '{timestamp_col}' not found in DataFrame")
 
-    return lazy_df.filter(pl.col(timestamp_col).dt.year() == correct_year)
+    # Check if column is datetime type (works even for empty DataFrames)
+    if not isinstance(schema[timestamp_col], (pl.Datetime, pl.Date)):
+        raise ValueError(f"Column '{timestamp_col}' must be a datetime or date type")
+
+    # Return empty DataFrame early if input is empty
+    if lazy_df.collect().is_empty():
+        return lazy_df
+
+    # Determine filtering conditions
+    conditions = []
+    if start_date is not None or end_date is not None:
+        if start_date is not None:
+            conditions.append(pl.col(timestamp_col) >= start_date)
+        if end_date is not None:
+            conditions.append(pl.col(timestamp_col) <= end_date)
+    else:
+        conditions.append(pl.col(timestamp_col).dt.year() == correct_year)
+
+    # Combine conditions and filter
+    combined_condition = conditions[0]
+    for cond in conditions[1:]:
+        combined_condition = combined_condition & cond
+
+    return lazy_df.filter(combined_condition)
