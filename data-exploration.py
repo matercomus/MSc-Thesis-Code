@@ -91,7 +91,7 @@ def _(df_timestamp_counts, plt, sns):
 def _(ldf_lp_filtered, profile_data):
     from utils import filter_by_date
 
-    ldf_lp_filtered_2019 = filter_by_date(ldf_lp_filtered, 2019)
+    ldf_lp_filtered_2019 = filter_by_date(ldf_lp_filtered, correct_year=2019)
     summary_df_lp_filtered_2019, _ = profile_data(ldf_lp_filtered_2019)
     summary_df_lp_filtered_2019
     return filter_by_date, ldf_lp_filtered_2019, summary_df_lp_filtered_2019
@@ -105,7 +105,7 @@ def _(ldf_lp_filtered_2019, plt, sns):
     # Convert the aggregated Polars DataFrame to Pandas for Seaborn
     df_timestamp_counts2 = timestamp_counts2.to_pandas()
 
-    sns.histplot(data=df_timestamp_counts2, x='timestamp', weights='len')
+    sns.histplot(data=df_timestamp_counts2, x='timestamp', weights='len', bins=12)
     plt.gca()
     return df_timestamp_counts2, timestamp_counts2
 
@@ -114,6 +114,23 @@ def _(ldf_lp_filtered_2019, plt, sns):
 def _(df_timestamp_counts2):
     df_timestamp_counts2.describe()
     return
+
+
+@app.cell
+def _(df_timestamp_counts2, plt, sns):
+    # If timestamps are datetime objects
+    import matplotlib.dates as mdates
+
+    ax = sns.histplot(data=df_timestamp_counts2, x='timestamp', weights='len', bins=50)
+
+    # Show ticks every 7 days (approximately 1/4 of a month)
+    ax.xaxis.set_major_locator(mdates.DayLocator(interval=5))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %d'))  # Format as "Month Day"
+    plt.xticks(rotation=90)
+
+    plt.tight_layout()
+    plt.show()
+    return ax, mdates
 
 
 @app.cell
