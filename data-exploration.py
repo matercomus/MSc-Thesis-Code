@@ -93,9 +93,27 @@ def _(ldf_lp_filtered, profile_data):
 
     ldf_lp_filtered_2019 = filter_by_year(ldf_lp_filtered, 2019)
     summary_df_lp_filtered_2019, _ = profile_data(ldf_lp_filtered_2019)
-    del ldf_lp_filtered_2019
     summary_df_lp_filtered_2019
     return filter_by_year, ldf_lp_filtered_2019, summary_df_lp_filtered_2019
+
+
+@app.cell
+def _(ldf_lp_filtered_2019, plt, sns):
+    # Efficiently aggregate timestamp counts using Polars
+    timestamp_counts2 = ldf_lp_filtered_2019.group_by("timestamp").len().collect()
+
+    # Convert the aggregated Polars DataFrame to Pandas for Seaborn
+    df_timestamp_counts2 = timestamp_counts2.to_pandas()
+
+    sns.histplot(data=df_timestamp_counts2, x='timestamp', weights='len')
+    plt.gca()
+    return df_timestamp_counts2, timestamp_counts2
+
+
+@app.cell
+def _(df_timestamp_counts2):
+    df_timestamp_counts2.describe()
+    return
 
 
 @app.cell
