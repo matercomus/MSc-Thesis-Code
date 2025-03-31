@@ -18,6 +18,7 @@ def _(mo):
         - [ ] Calc velocity
         - [x] Len, Min, Max, Mean
         - [ ] Plots
+        - [ ] profile code
         """
     )
     return
@@ -81,9 +82,20 @@ def _(ldf_lp_filtered):
 
 @app.cell
 def _(df_timestamp_counts, plt, sns):
-    sns.histplot(data=df_timestamp_counts, x='timestamp', weights='count')
+    sns.histplot(data=df_timestamp_counts, x='timestamp', weights='len')
     plt.gca()
     return
+
+
+@app.cell
+def _(ldf_lp_filtered, profile_data):
+    from utils import filter_by_year
+
+    ldf_lp_filtered_2019 = filter_by_year(ldf_lp_filtered, 2019)
+    summary_df_lp_filtered_2019, _ = profile_data(ldf_lp_filtered_2019)
+    del ldf_lp_filtered_2019
+    summary_df_lp_filtered_2019
+    return filter_by_year, ldf_lp_filtered_2019, summary_df_lp_filtered_2019
 
 
 @app.cell

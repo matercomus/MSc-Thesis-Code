@@ -78,12 +78,12 @@ def profile_data(
                 "missing_%": missing_stats[f"null_pct_{col}"][0],
                 "unique": unique_stats[col][0],
             }
-
-            # Add describe stats
-            col_describe = describe_df.filter(pl.col("statistic") == col)
+            describe_stats = {}
             for stat in ["mean", "std", "min", "max", "median"]:
-                if stat in col_describe.columns:
-                    stats[col][stat] = col_describe[stat][0]
+                value = describe_df.filter(pl.col("statistic") == stat)[col].to_list()
+                if value:
+                    describe_stats[stat] = value[0]
+            stats[col].update(describe_stats)
 
         # Convert to DataFrame
         stats_df = pl.DataFrame(
@@ -98,8 +98,21 @@ def profile_data(
 
 def filter_by_year(
     lazy_df: pl.LazyFrame,
-    timestamp_col: str = "timestamp",
     correct_year: int = 2019,
+    timestamp_col: str = "timestamp",
 ) -> pl.LazyFrame:
-    """Filters rows where the year matches specified year."""
+    """
+    Filters rows where the year of a timestamp column matches the specified year.
+
+    Args:
+        lazy_df: Input LazyFrame
+        correct_year: Target year (default: 2019)
+        timestamp_col: Name of the timestamp column (default: "timestamp")
+
+    Returns:
+        Filtered LazyFrame containing only rows from the target year
+    """
+    if timestamp_col not in lazy_df.collect_schema().names():
+        raise ValueError(f"Column '{timestamp_col}' not found in DataFrame")
+
     return lazy_df.filter(pl.col(timestamp_col).dt.year() == correct_year)
