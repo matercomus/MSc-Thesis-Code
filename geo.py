@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.12.8"
+__generated_with = "0.12.9"
 app = marimo.App(width="full")
 
 
@@ -10,7 +10,8 @@ def _():
     import geopandas as gpd
     import polars as pl
     from datetime import datetime, timedelta
-    return datetime, gpd, mo, pl, timedelta
+    from utils import filter_by_date
+    return datetime, filter_by_date, gpd, mo, pl, timedelta
 
 
 @app.cell
@@ -20,26 +21,30 @@ def _(pl):
 
 
 @app.cell
-def _(datetime, ldf, pl, timedelta):
-    def filter_last_n_hours(ldf, specific_day, n_hours=6):
-        # Define the start and end times based on the selected number of hours
-        last_n_hours_start = specific_day + timedelta(hours=24 - n_hours)
-        last_n_hours_end = specific_day + timedelta(hours=24)
-
-        # Filter the LazyFrame to only keep the last n hours of the specified day
-        df_filtered_last_nh_lazy = ldf.filter(
-            (pl.col("timestamp") >= last_n_hours_start) & 
-            (pl.col("timestamp") < last_n_hours_end)
-        )
-        return df_filtered_last_nh_lazy
-
-    df_filtered_last_6h_lazy = filter_last_n_hours(ldf=ldf,specific_day=datetime(2019, 11, 25),n_hours=3)
-    return df_filtered_last_6h_lazy, filter_last_n_hours
+def _(datetime, filter_by_date, ldf, timedelta):
+    n_hours = 2
+    start_date = datetime(2019, 11, 25, 23, 59, 59, 999999) - timedelta(hours=n_hours)
+    end_date=datetime(2019, 11, 25, 23, 59, 59, 999999)
+    df_filtered_last_6h_lazy = filter_by_date(
+            lazy_df=ldf,
+            start_date=start_date,
+            end_date=end_date)
+    return df_filtered_last_6h_lazy, end_date, n_hours, start_date
 
 
 @app.cell
-def _(df_filtered_last_6h_lazy):
-    df_pandas = df_filtered_last_6h_lazy.collect().to_pandas()  # Convert to Pandas
+def _(df_filtered_last_6h_lazy, pl):
+    # First simple rectangle region filter to reduce computations
+    df_filtered_last_6h_recf_lazy = df_filtered_last_6h_lazy.filter(
+        (pl.col("longitude").is_between(115.7, 117.4)) &
+        (pl.col("latitude").is_between(39.4, 41.6))
+    )
+    return (df_filtered_last_6h_recf_lazy,)
+
+
+@app.cell
+def _(df_filtered_last_6h_recf_lazy):
+    df_pandas = df_filtered_last_6h_recf_lazy.collect().to_pandas()  # Convert to Pandas
     return (df_pandas,)
 
 
