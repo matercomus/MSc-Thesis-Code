@@ -134,7 +134,62 @@ def _(df_timestamp_counts2, plt, sns):
 
 
 @app.cell
-def _():
+def _(filter_by_date, ldf_lp_filtered_2019):
+    from datetime import datetime
+
+    ldf_lp_filtered_2019_11_25 = filter_by_date(
+            ldf_lp_filtered_2019,
+            start_date=datetime(2019, 11, 25, 0, 0),
+            end_date=datetime(2019, 11, 25, 23, 59, 59, 999999),)
+    return datetime, ldf_lp_filtered_2019_11_25
+
+
+@app.cell
+def _(ldf_lp_filtered_2019_11_25):
+    timestamp_counts3 = ldf_lp_filtered_2019_11_25.group_by("timestamp").len().collect()
+    df_timestamp_counts3 = timestamp_counts3.to_pandas()
+    return df_timestamp_counts3, timestamp_counts3
+
+
+@app.cell
+def _(df_timestamp_counts3, plt, sns):
+    # Plot
+    sns.histplot(data=df_timestamp_counts3, x='timestamp', weights='len')
+    plt.xticks(rotation=90)
+    plt.gca()
+    return
+
+
+@app.cell
+def _(df_timestamp_counts3):
+    df_timestamp_counts3.describe()
+    return
+
+
+@app.cell
+def _(ldf_lp_filtered_2019_11_25, profile_data):
+    summary_ldf_lp_filtered_2019_11_25, _ = profile_data(ldf_lp_filtered_2019_11_25)
+    return (summary_ldf_lp_filtered_2019_11_25,)
+
+
+@app.cell
+def _(summary_ldf_lp_filtered_2019_11_25):
+    summary_ldf_lp_filtered_2019_11_25
+    return
+
+
+@app.cell
+def _(ldf_lp_filtered_2019_11_25):
+    ldf_lp_filtered_2019_11_25.sink_parquet("ldf_lp_filtered_2019_11_25.parquet")
+    return
+
+
+@app.cell
+def _(df_timestamp_counts3, plt, sns):
+    # Plot
+    sns.histplot(data=df_timestamp_counts3, x='timestamp', weights='len', bins=24)
+    plt.xticks(rotation=90)
+    plt.gca()
     return
 
 
