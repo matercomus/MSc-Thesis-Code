@@ -3,6 +3,14 @@
 import polars as pl
 import datetime
 from typing import Dict, Tuple, Optional, List, Union
+import logging
+import sys
+
+# --- Constants ---
+EARTH_RADIUS_KM = 6371.0
+
+
+# --- Functions ---
 
 
 def filter_chinese_license_plates(
@@ -146,3 +154,128 @@ def filter_by_date(
         combined_condition = combined_condition & cond
 
     return lazy_df.filter(combined_condition)
+
+
+def configure_logging():
+    """Configure logging to stdout"""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        stream=sys.stdout,
+    )
+
+
+def add_time_distance_calcs(lazy_df: pl.LazyFrame) -> pl.LazyFrame:
+    """Add time difference and Haversine distance calculations"""
+    return (
+        lazy_df.with_columns(
+            [
+                pl.col("timestamp")
+                .diff(1)
+                .over("license_plate")
+                .alias("time_diff_duration"),
+                pl.col("latitude")
+                .shift(1)
+                .over("license_plate")
+                .alias("prev_latitude"),
+                pl.col("longitude")
+                .shift(1)
+                .over("license_plate")
+                .alias("prev_longitude"),
+            ]
+        )
+        .with_columns(
+            [
+                pl.col("time_diff_duration")
+                .dt.total_seconds()
+                .alias("time_diff_seconds"),
+                pl.col("latitude").radians().alias("lat_rad"),
+                pl.col("longitude").radians().alias("lon_rad"),
+                pl.col("prev_latitude").radians().alias("prev_lat_rad"),
+                pl.col("prev_longitude").radians().alias("prev_lon_rad"),
+            ]
+        )
+        .with_columns(
+            [
+                ((pl.col("lat_rad") - pl.col("prev_lat_rad")) / 2)
+                .sin()
+                .pow(2)
+                .alias("sin_dlat_half_sq"),
+                ((pl.col("lon_rad") - pl.col("prev_lon_rad")) / 2)
+                .sin()
+                .pow(2)
+                .alias("sin_dlon_half_sq"),
+            ]
+        )
+        .with_columns(
+            [
+                (
+                    pl.col("sin_dlat_half_sq")
+                    + pl.col("lat_rad").cos()
+                    * pl.col("prev_lat_rad").cos()
+                    * pl.col("sin_dlon_half_sq")
+                ).alias("haversine_a")
+            ]
+        )
+        .with_columns(
+            [
+                (
+                    pl.lit(2.0)
+                    * pl.arctan2(
+                        pl.col("haversine_a").sqrt(),
+                        (pl.lit(1.0) - pl.col("haversine_a")).sqrt(),
+                    )
+                ).alias("haversine_c")
+            ]
+        )
+        .with_columns(
+            [
+                (pl.lit(EARTH_RADIUS_KM) * pl.col("haversine_c"))
+                .fill_null(0.0)
+                .alias("distance_km")
+            ]
+        )
+    )
+
+
+def add_implied_speed(lazy_df: pl.LazyFrame) -> pl.LazyFrame:
+    """Calculate speed in km/h between points"""
+    return lazy_df.with_columns(
+        [
+            pl.when(pl.col("time_diff_seconds") > 0)
+            .then(pl.col("distance_km") / (pl.col("time_diff_seconds") / 3600.0))
+            .otherwise(0.0)
+            .alias("implied_speed_kph")
+        ]
+    )
+
+
+def add_abnormality_flags(
+    lazy_df: pl.LazyFrame, gap_threshold_sec: float, speed_threshold_kph: float
+) -> pl.LazyFrame:
+    """Add flags for temporal gaps and position jumps"""
+    return lazy_df.with_columns(
+        [
+            (pl.col("time_diff_seconds") > gap_threshold_sec).alias("is_temporal_gap"),
+            (pl.col("implied_speed_kph") > speed_threshold_kph).alias(
+                "is_position_jump"
+            ),
+        ]
+    )
+
+
+def select_final_columns(lazy_df: pl.LazyFrame) -> pl.LazyFrame:
+    """Select and format final output columns"""
+    return lazy_df.select(
+        [
+            "license_plate",
+            "timestamp",
+            "longitude",
+            "latitude",
+            pl.col("time_diff_seconds").round(2),
+            pl.col("distance_km").round(3),
+            pl.col("implied_speed_kph").round(2),
+            "is_temporal_gap",
+            "is_position_jump",
+        ]
+    )

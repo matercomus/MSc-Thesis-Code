@@ -1,12 +1,16 @@
 # tests.py
 
-from datetime import datetime, date
+from datetime import datetime
 import polars as pl
 import pytest
 from utils import (
     filter_chinese_license_plates,
     profile_data,
     filter_by_date,
+    add_time_distance_calcs,
+    add_abnormality_flags,
+    add_implied_speed,
+    select_final_columns,
 )
 
 
@@ -211,3 +215,74 @@ def test_filter_by_date_invalid_date_type():
         ValueError, match="Column 'timestamp' must be a datetime or date type"
     ):
         filter_by_date(ldf).collect()
+
+
+@pytest.fixture
+def sample_data():
+    return pl.LazyFrame(
+        {
+            "license_plate": ["A", "A", "B", "B"],
+            "timestamp": [
+                "2023-01-01T00:00:00",
+                "2023-01-01T00:00:05",
+                "2023-01-01T00:00:00",
+                "2023-01-01T00:00:01",
+            ],
+            "latitude": [0.0, 1.0, 45.0, 45.001],
+            "longitude": [0.0, 0.0, 0.0, 0.0],
+        }
+    ).with_columns(pl.col("timestamp").str.strptime(pl.Datetime))
+
+
+def test_time_distance_calcs(sample_data):
+    df = add_time_distance_calcs(
+        sample_data.sort(["license_plate", "timestamp"])
+    ).collect()
+    assert df["time_diff_seconds"].to_list() == [None, 5.0, None, 1.0]
+    assert df["distance_km"][1] == pytest.approx(111.195, rel=1e-3)
+    assert df["distance_km"][3] == pytest.approx(0.11119, rel=1e-2)
+
+
+@pytest.mark.parametrize(
+    "time_diff, distance, expected_speed",
+    [
+        (5.0, 1.0, 720.0),  # 1km in 5s = 720 km/h
+        (0.0, 1.0, 0.0),  # Zero time case
+        (3600.0, 100.0, 100.0),  # 100km in 1h = 100 km/h
+    ],
+)
+def test_implied_speed(time_diff, distance, expected_speed):
+    df = pl.LazyFrame({"time_diff_seconds": [time_diff], "distance_km": [distance]})
+    result = add_implied_speed(df).collect()
+    assert result["implied_speed_kph"][0] == pytest.approx(expected_speed)
+
+
+def test_abnormality_flags(sample_data):
+    df = (
+        sample_data.pipe(add_time_distance_calcs)
+        .pipe(add_implied_speed)
+        .pipe(add_abnormality_flags, 4.0, 100.0)
+        .collect()
+    )
+    assert df["is_temporal_gap"].to_list() == [None, True, None, False]
+    assert df["is_position_jump"].to_list() == [False, True, False, True]
+
+def test_final_columns(sample_data):
+    df = (
+        sample_data.pipe(add_time_distance_calcs)
+        .pipe(add_implied_speed)
+        .pipe(add_abnormality_flags, 60.0, 100.0)
+        .pipe(select_final_columns)
+        .collect()
+    )
+    assert set(df.columns) == {
+        "license_plate",
+        "timestamp",
+        "longitude",
+        "latitude",
+        "time_diff_seconds",
+        "distance_km",
+        "implied_speed_kph",
+        "is_temporal_gap",
+        "is_position_jump",
+    }
