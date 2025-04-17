@@ -40,13 +40,11 @@ def _(
     add_implied_speed,
     add_time_distance_calcs,
     lazy_df,
-    pl,
     select_final_columns,
 ):
     # Process pipeline
     results = (
         lazy_df
-        .with_columns(pl.col("timestamp").cast(pl.Date))
         .sort("license_plate", "timestamp")
         .pipe(add_time_distance_calcs)
         .pipe(add_implied_speed)
@@ -74,12 +72,9 @@ def _(pl, results):
 
 @app.cell
 def _(pl, results):
-    results.select(pl.col("timestamp")).describe()
-    return
-
-
-@app.cell
-def _():
+    results.filter(
+        pl.col("is_temporal_gap") & pl.col("is_position_jump")
+    )
     return
 
 
