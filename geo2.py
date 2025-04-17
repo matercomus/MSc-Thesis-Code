@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.12.9"
+__generated_with = "0.12.10"
 app = marimo.App(width="full")
 
 
@@ -61,12 +61,6 @@ def _(beijing_boundary, gpd, plt, points_in_beijing):
 @app.cell
 def _(fig):
     fig.savefig("filtered_points_in_beijing.png", dpi=300, bbox_inches='tight')
-    return
-
-
-@app.cell
-def _(fig):
-    fig.savefig("filtered_points_in_beijing.pdf", dpi=300, bbox_inches='tight')
     return
 
 
