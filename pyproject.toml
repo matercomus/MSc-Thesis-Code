@@ -7,3 +7,9 @@ requires-python = ">=3.11"
 dependencies = [
     "pytest>=8.3.5",
 ]
+
+[tool.marimo.experimental]
+lsp = true
+
+[tool.marimo.diagnostics]
+enabled = true
