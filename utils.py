@@ -282,3 +282,53 @@ def select_final_columns(lazy_df: pl.LazyFrame) -> pl.LazyFrame:
             "is_position_jump",
         ]
     )
+
+
+def add_period_id(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Add a period_id column that uniquely identifies each continuous occupancy status period.
+    """
+    df = df.with_columns(
+        (
+            # Assign a unique period id for each change in occupancy status per license plate
+            pl.col("occupancy_status")
+            .ne(pl.col("occupancy_status").shift(1))
+            .cast(pl.Int64)
+            .cum_sum()
+            .alias("period_id")
+        )
+    )
+    return df
+
+
+def summarize_periods(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Summarize continuous periods of occupancy status into single rows with statistics.
+    """
+    return df.group_by(["license_plate", "occupancy_status", "period_id"]).agg(
+        [
+            # Calculate duration of each period
+            (pl.col("timestamp").max() - pl.col("timestamp").min()).alias("duration"),
+            # Count number of rows in each period
+            pl.len().alias("count_rows"),
+            # Get first and last timestamp in each period
+            pl.col("timestamp").min().alias("start_time"),
+            pl.col("timestamp").max().alias("end_time"),
+            # Calculate average implied speed per period
+            pl.col("implied_speed_kph").mean().alias("avg_implied_speed"),
+            # Calculate variance of implied speed
+            pl.col("implied_speed_kph").var().alias("var_implied_speed"),
+            # Calculate average time difference per period
+            pl.col("time_diff_seconds").mean().alias("avg_time_diff"),
+            # Calculate variance of time difference
+            pl.col("time_diff_seconds").var().alias("var_time_diff"),
+            # Calculate average distance per period
+            pl.col("distance_km").mean().alias("avg_distance"),
+            # Calculate variance of distance
+            pl.col("distance_km").var().alias("var_distance"),
+            # Calculate sum of all time differences from start within a period
+            (pl.col("timestamp") - pl.col("timestamp").min())
+            .sum()
+            .alias("sum_time_diffs"),
+        ]
+    )

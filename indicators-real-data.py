@@ -15,14 +15,18 @@ def _():
         add_implied_speed,
         add_abnormality_flags,
         select_final_columns,
+        add_period_id,
+        summarize_periods,
     )
     return (
         add_abnormality_flags,
         add_implied_speed,
+        add_period_id,
         add_time_distance_calcs,
         configure_logging,
         pl,
         select_final_columns,
+        summarize_periods,
     )
 
 
@@ -81,15 +85,49 @@ def _(pl, results):
 
 @app.cell
 def _(pl, results):
-    # Remove rows with any flag and save the cleaned lazy DF as parquet
+    # Compute all unique flagged license plates
+    flagged_license_plates = (
+        results.filter(pl.col("is_temporal_gap") | pl.col("is_position_jump"))
+        .select("license_plate")
+        .unique()
+    )
+
+    # Remove rows with any flagged license plate and save the cleaned lazy DF as parquet
     cleaned_lazy_df = (
-        results.filter(~pl.col("is_temporal_gap") & ~pl.col("is_position_jump"))
+        results.filter(
+            ~pl.col("license_plate").is_in(
+                flagged_license_plates.get_column("license_plate")
+            )
+        )
         .drop(["is_temporal_gap", "is_position_jump"])
         .lazy()
     )
 
     # Sink cleaned lazy DF
     cleaned_lazy_df.sink_parquet("cleaned_points_in_beijing.parquet")
+    return (cleaned_lazy_df,)
+
+
+@app.cell
+def _(cleaned_lazy_df):
+    cleaned_lazy_df.collect().head(50)
+    return
+
+
+@app.cell
+def _(add_period_id, cleaned_lazy_df, summarize_periods):
+    # Add period_id to cleaned data
+    period_lazy_df = (
+        cleaned_lazy_df.collect()
+        .pipe(add_period_id)
+        .pipe(summarize_periods)
+        .lazy()
+    )
+
+    # Display the first few rows of the cleaned period DF
+    period_lazy_df.collect().sort(
+        "license_plate", "occupancy_status", "start_time"
+    ).head(50)
     return
 
 
