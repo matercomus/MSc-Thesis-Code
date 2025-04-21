@@ -124,9 +124,20 @@ def _(add_period_id, cleaned_lazy_df, summarize_periods):
         .lazy()
     )
 
-    # Display the first few rows of the cleaned period DF
-    period_lazy_df.collect().sort(
-        "license_plate", "occupancy_status", "start_time"
+    period_df = period_lazy_df.collect().sort("license_plate", "start_time")
+    return (period_df,)
+
+
+@app.cell
+def _(period_df):
+    period_df.head(50)
+    return
+
+
+@app.cell
+def _(period_df, pl):
+    period_df.filter(pl.col("license_plate") == "京BN8859").sort(
+        "start_time"
     ).head(50)
     return
 
