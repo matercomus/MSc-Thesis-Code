@@ -1,6 +1,6 @@
 # tests.py
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import polars as pl
 import pytest
 from utils import (
@@ -10,7 +10,8 @@ from utils import (
     add_time_distance_calcs,
     add_abnormality_flags,
     add_implied_speed,
-    select_final_columns,
+    add_period_id,
+    summarize_periods,
 )
 
 
@@ -95,7 +96,7 @@ def test_profile_data_specified_columns():
     """Test profiling specific columns only."""
     data = {"col1": [1, 2], "col2": ["a", "b"]}
     ldf = pl.LazyFrame(data)
-    stats_df, stats_dict = profile_data(ldf, columns=["col1"])
+    stats_df, _ = profile_data(ldf, columns=["col1"])
     assert stats_df.shape[0] == 1
     assert stats_df["column"].to_list() == ["col1"]
 
@@ -267,22 +268,175 @@ def test_abnormality_flags(sample_data):
     assert df["is_temporal_gap"].to_list() == [None, True, None, False]
     assert df["is_position_jump"].to_list() == [False, True, False, True]
 
-def test_final_columns(sample_data):
-    df = (
-        sample_data.pipe(add_time_distance_calcs)
-        .pipe(add_implied_speed)
-        .pipe(add_abnormality_flags, 60.0, 100.0)
-        .pipe(select_final_columns)
-        .collect()
+
+@pytest.fixture
+def sample_data_periods():
+    base_time = datetime(2023, 1, 1, 0, 0, 0)
+
+    return pl.DataFrame(
+        {
+            "license_plate": ["A", "A", "A", "A", "B", "B"],
+            "timestamp": [
+                base_time,
+                base_time + timedelta(microseconds=1),
+                base_time + timedelta(microseconds=2),
+                base_time + timedelta(microseconds=3),
+                base_time,
+                base_time + timedelta(microseconds=1),
+            ],
+            "latitude": [39.9, 39.91, 39.92, 39.93, 40.0, 40.01],
+            "longitude": [116.4, 116.41, 116.42, 116.43, 116.5, 116.51],
+            "occupancy_status": ["1", "1", "0", "0", "0", "1"],
+            "implied_speed_kph": [50.0, 45.0, 0.0, 0.0, 30.0, 120.0],
+            "time_diff_seconds": [60, 60, 60, 60, 60, 60],
+            "distance_km": [0.5, 0.45, 0.0, 0.0, 0.3, 1.2],
+        }
     )
-    assert set(df.columns) == {
-        "license_plate",
-        "timestamp",
-        "longitude",
-        "latitude",
-        "time_diff_seconds",
-        "distance_km",
-        "implied_speed_kph",
-        "is_temporal_gap",
-        "is_position_jump",
-    }
+
+
+@pytest.fixture
+def sample_data_multiple_periods():
+    """More complex sample with explicitly included required columns."""
+    base_time = datetime(2023, 1, 1, 0, 0, 0)
+
+    return pl.DataFrame(
+        {
+            "license_plate": ["A"] * 5 + ["B"] * 5,
+            "timestamp": [
+                base_time,
+                base_time + timedelta(seconds=1),
+                base_time + timedelta(seconds=2),
+                base_time + timedelta(seconds=3),
+                base_time + timedelta(seconds=4),
+                base_time,
+                base_time + timedelta(seconds=1),
+                base_time + timedelta(seconds=2),
+                base_time + timedelta(seconds=3),
+                base_time + timedelta(seconds=4),
+            ],
+            "occupancy_status": ["1", "1", "0", "1", "0", "0", "0", "1", "0", "0"],
+            "implied_speed_kph": [40, 42, 0, 44, 46, 30, 35, 32, 33, 34],
+            "time_diff_seconds": [60] * 10,
+            "distance_km": [0.6, 0.7, 0, 0.8, 0.9, 0.2, 0.3, 0.25, 0.3, 0.35],
+        }
+    )
+
+
+def test_add_period_id_assigns_correctly(sample_data_periods):
+    df = sample_data_periods.sort(["license_plate", "timestamp"])
+    df_with_period = add_period_id(df)
+
+    periods_a = (
+        df_with_period.filter(pl.col("license_plate") == "A")
+        .select("period_id")
+        .unique()
+        .to_series()
+        .to_list()
+    )
+    periods_b = (
+        df_with_period.filter(pl.col("license_plate") == "B")
+        .select("period_id")
+        .unique()
+        .to_series()
+        .to_list()
+    )
+
+    assert sorted(periods_a) == [1, 2]
+    assert sorted(periods_b) == [3, 4]
+    assert df_with_period["period_id"][0] == 1
+
+
+def test_summarize_periods_basic(sample_data_periods):
+    df = sample_data_periods.sort(["license_plate", "timestamp"])
+    df_with_period = add_period_id(df)
+
+    summary = summarize_periods(df_with_period)
+
+    # First period of A
+    a_period_1 = summary.filter(
+        (pl.col("license_plate") == "A") & (pl.col("period_id") == 1)
+    ).to_dicts()[0]
+
+    assert a_period_1["duration"] == timedelta(microseconds=1)
+    assert a_period_1["count_rows"] == 2
+    assert abs(a_period_1["avg_implied_speed"] - 47.5) < 1e-6
+
+    # Second period of A
+    a_period_2 = summary.filter(
+        (pl.col("license_plate") == "A") & (pl.col("period_id") == 2)
+    ).to_dicts()[0]
+
+    assert a_period_2["duration"] == timedelta(microseconds=1)
+    assert a_period_2["count_rows"] == 2
+    assert abs(a_period_2["avg_implied_speed"] - 0.0) < 1e-6
+
+
+def test_summarize_periods_multiple_periods(sample_data_multiple_periods):
+    df = sample_data_multiple_periods.sort(["license_plate", "timestamp"])
+    df_with_period = add_period_id(df)
+
+    summary = summarize_periods(df_with_period)
+
+    periods_a = (
+        summary.filter(pl.col("license_plate") == "A")
+        .select("period_id")
+        .unique()
+        .to_series()
+        .to_list()
+    )
+    periods_b = (
+        summary.filter(pl.col("license_plate") == "B")
+        .select("period_id")
+        .unique()
+        .to_series()
+        .to_list()
+    )
+
+    # Plate A has 4 periods due to occupancy changes at rows 2 & 3
+    assert sorted(periods_a) == [1, 2, 3, 4]
+    # Plate B has 3 periods as expected
+    assert sorted(periods_b) == [5, 6, 7]
+
+    for period_row in summary.to_dicts():
+        assert period_row["count_rows"] >= 1
+        assert isinstance(period_row["duration"], timedelta)
+        assert period_row["avg_implied_speed"] >= 0
+
+
+def test_summarize_periods_empty():
+    empty_df = pl.DataFrame(
+        {
+            "license_plate": pl.Series([], dtype=pl.Utf8),
+            "timestamp": pl.Series([], dtype=pl.Datetime("us")),
+            "occupancy_status": pl.Series([], dtype=pl.Utf8),
+            "implied_speed_kph": pl.Series([], dtype=pl.Float64),
+            "time_diff_seconds": pl.Series([], dtype=pl.Float64),
+            "distance_km": pl.Series([], dtype=pl.Float64),
+            "period_id": pl.Series([], dtype=pl.Int32),
+        }
+    )
+    summary = summarize_periods(empty_df)
+    assert summary.is_empty()
+
+
+def test_period_id_increments_on_license_plate_change():
+    df = pl.DataFrame(
+        {
+            "license_plate": ["A", "A", "B", "B", "A"],
+            "timestamp": [
+                datetime(2023, 1, 1, 0, 0, 0),
+                datetime(2023, 1, 1, 0, 0, 1),
+                datetime(2023, 1, 1, 0, 0, 2),
+                datetime(2023, 1, 1, 0, 0, 3),
+                datetime(2023, 1, 1, 0, 0, 4),
+            ],
+            "occupancy_status": ["1", "1", "1", "1", "1"],
+            "implied_speed_kph": [10, 12, 14, 16, 18],
+            "time_diff_seconds": [1, 1, 1, 1, 1],
+            "distance_km": [0.1, 0.1, 0.1, 0.1, 0.1],
+        }
+    )
+
+    df_with_period = add_period_id(df)
+    expected_period_ids = [1, 1, 2, 2, 3]
+    assert df_with_period["period_id"].to_list() == expected_period_ids

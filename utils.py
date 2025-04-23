@@ -173,6 +173,7 @@ def add_time_distance_calcs(lazy_df: pl.LazyFrame) -> pl.LazyFrame:
                 pl.col("timestamp")
                 .diff(1)
                 .over("license_plate")
+                .cast(pl.Duration)
                 .alias("time_diff_duration"),
                 pl.col("latitude")
                 .shift(1)
@@ -286,49 +287,63 @@ def select_final_columns(lazy_df: pl.LazyFrame) -> pl.LazyFrame:
 
 def add_period_id(df: pl.DataFrame) -> pl.DataFrame:
     """
-    Add a period_id column that uniquely identifies each continuous occupancy status period.
+    Identify continuous periods per license_plate and occupancy_status.
+    Assign period IDs starting at 1 and increment on changes.
     """
-    df = df.with_columns(
-        (
-            # Assign a unique period id for each change in occupancy status per license plate
-            pl.col("occupancy_status")
-            .ne(pl.col("occupancy_status").shift(1))
-            .cast(pl.Int64)
-            .cum_sum()
-            .alias("period_id")
-        )
+    # Identify changes in license_plate or occupancy_status compared to previous row
+    license_plate = pl.col("license_plate")
+    occupancy_status = pl.col("occupancy_status")
+
+    prev_license_plate = license_plate.shift(1)
+    prev_occupancy_status = occupancy_status.shift(1)
+
+    change = (license_plate != prev_license_plate) | (
+        occupancy_status != prev_occupancy_status
     )
-    return df
+
+    # Mark first row as a new period and compute cumulative sum to assign period IDs
+    change_filled = change.fill_null(True).cast(pl.Int32)
+    period_id = change_filled.cum_sum().alias("period_id")
+
+    return df.with_columns(period_id)
 
 
 def summarize_periods(df: pl.DataFrame) -> pl.DataFrame:
     """
-    Summarize continuous periods of occupancy status into single rows with statistics.
+    Aggregate statistics per license_plate, occupancy_status, period_id.
+    Expects columns: license_plate, occupancy_status, period_id,
+                     timestamp, implied_speed_kph, time_diff_seconds, distance_km.
+    Returns duration, count_rows, avg_implied_speed, sum_time_diff, sum_distance per group.
     """
-    return df.group_by(["license_plate", "occupancy_status", "period_id"]).agg(
-        [
-            # Calculate duration of each period
-            (pl.col("timestamp").max() - pl.col("timestamp").min()).alias("duration"),
-            # Count number of rows in each period
-            pl.len().alias("count_rows"),
-            # Get first and last timestamp in each period
-            pl.col("timestamp").min().alias("start_time"),
-            pl.col("timestamp").max().alias("end_time"),
-            # Calculate average implied speed per period
-            pl.col("implied_speed_kph").mean().alias("avg_implied_speed"),
-            # Calculate variance of implied speed
-            pl.col("implied_speed_kph").var().alias("var_implied_speed"),
-            # Calculate average time difference per period
-            pl.col("time_diff_seconds").mean().alias("avg_time_diff"),
-            # Calculate variance of time difference
-            pl.col("time_diff_seconds").var().alias("var_time_diff"),
-            # Calculate average distance per period
-            pl.col("distance_km").mean().alias("avg_distance"),
-            # Calculate variance of distance
-            pl.col("distance_km").var().alias("var_distance"),
-            # Calculate sum of all time differences from start within a period
-            (pl.col("timestamp") - pl.col("timestamp").min())
-            .sum()
-            .alias("sum_time_diffs"),
-        ]
+    if df.is_empty():
+        # Return empty with expected schema if input empty
+        return pl.DataFrame(
+            {
+                "license_plate": pl.Series([], dtype=pl.Utf8),
+                "occupancy_status": pl.Series([], dtype=pl.Utf8),
+                "period_id": pl.Series([], dtype=pl.Int32),
+                "duration": pl.Series([], dtype=pl.Duration),
+                "count_rows": pl.Series([], dtype=pl.UInt32),
+                "avg_implied_speed": pl.Series([], dtype=pl.Float64),
+                "sum_time_diff": pl.Series([], dtype=pl.Float64),
+                "sum_distance": pl.Series([], dtype=pl.Float64),
+            }
+        )
+
+    grouped = (
+        df.group_by(["license_plate", "occupancy_status", "period_id"]).agg(
+            [
+                (pl.col("timestamp").max() - pl.col("timestamp").min()).alias(
+                    "duration"
+                ),
+                pl.count().alias("count_rows"),
+                pl.col("implied_speed_kph").mean().alias("avg_implied_speed"),
+                pl.col("time_diff_seconds").sum().alias("sum_time_diff"),
+                pl.col("distance_km").sum().alias("sum_distance"),
+            ]
+        )
+        # Optionally sort output
+        .sort(["license_plate", "period_id"])
     )
+
+    return grouped
