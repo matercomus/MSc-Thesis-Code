@@ -15,10 +15,10 @@ are in the same directory as this script.
 """
 
 import streamlit as st
-
-st.set_page_config(page_title="Trajectory Previewer", layout="wide")
 import polars as pl
 import plotly.express as px
+
+st.set_page_config(page_title="Trajectory Previewer", layout="wide")
 
 # Paths to Parquet files
 PERIOD_FILE = "periods_in_beijing.parquet"
@@ -106,7 +106,6 @@ def main():
     if not period_ids:
         st.warning(f"No periods found for license plate '{lp}'.")
         return
-
     # Clamp period index
     n_periods = len(period_ids)
     if st.session_state.period_index >= n_periods:
@@ -114,11 +113,17 @@ def main():
     if st.session_state.period_index < 0:
         st.session_state.period_index = 0
     period_id = period_ids[st.session_state.period_index]
+    n_periods = len(period_ids)
+    if st.session_state.period_index >= n_periods:
+        st.session_state.period_index = n_periods - 1
+    if st.session_state.period_index < 0:
+        st.session_state.period_index = 0
+    period_id = period_ids[st.session_state.period_index]
+    # Display trajectory header
+    st.markdown(f"**Trajectory: {lp} | Period: {period_id} ({st.session_state.period_index+1}/{n_periods})**")
 
-    # Map background toggle (now below map)
-    # Let user choose map background: OpenStreetMap or plain plot
-    bg_osm = st.checkbox("Use OpenStreetMap background", value=True)
-    # Load trajectory data
+    # Toggle map background
+    bg_osm = st.checkbox("Show map background (OSM)", value=True, key="bg_osm")
     try:
         traj_df = get_trajectory(lp, period_id)
     except Exception as e:
@@ -133,23 +138,19 @@ def main():
 
     # Build plot
     if bg_osm:
-        import plotly.graph_objects as go
         center_lat = sum(lat_list) / len(lat_list)
         center_lon = sum(lon_list) / len(lon_list)
-        # Use deprecated scattermapbox for compatibility
-        fig = go.Figure(
-            go.Scattermapbox(
-                lat=lat_list,
-                lon=lon_list,
-                mode="lines",
-                line=dict(color="red", width=2)
-            )
+        # Use Plotly Express line_mapbox for trajectories on OpenStreetMap
+        fig = px.line_mapbox(
+            lat=lat_list,
+            lon=lon_list,
         )
+        fig.update_traces(line_color="red")
         fig.update_layout(
             mapbox_style="open-street-map",
             mapbox_center={"lat": center_lat, "lon": center_lon},
             mapbox_zoom=12,
-            margin={"l": 0, "r": 0, "t": 0, "b": 0}
+            margin={"l": 0, "r": 0, "t": 0, "b": 0},
         )
     else:
         fig = px.line(x=lon_list, y=lat_list)
@@ -166,24 +167,43 @@ def main():
 
     # Display map
     st.plotly_chart(fig, use_container_width=True)
-    st.markdown(f"**Trajectory: {lp} | Period: {period_id} ({st.session_state.period_index+1}/{n_periods})**")
 
-    # Combined navigation controls below map using buttons
-    nav_cols = st.columns([1, 6, 6, 1])
-    # License-plate navigation
-    with nav_cols[1]:
-        if st.button("⬆️ Previous Plate", key="prev_plate"):
+    # Combined navigation using a segmented control with Material icons
+    nav_icons = {
+        "prev_plate": ":material/arrow_upward:",
+        "prev_period": ":material/arrow_back:",
+        "next_period": ":material/arrow_forward:",
+        "next_plate": ":material/arrow_downward:",
+    }
+
+    def handle_nav():
+        choice = st.session_state.nav
+        if choice == "prev_plate":
             st.session_state.lp_index = max(0, st.session_state.lp_index - 1)
             st.session_state.period_index = 0
-        if st.button("Next Plate ⬇️", key="next_plate"):
+        elif choice == "next_plate":
             st.session_state.lp_index = min(n_lp - 1, st.session_state.lp_index + 1)
             st.session_state.period_index = 0
-    # Period navigation
-    with nav_cols[2]:
-        if st.button("◀️ Previous Period", key="prev_period"):
+        elif choice == "prev_period":
             st.session_state.period_index = max(0, st.session_state.period_index - 1)
-        if st.button("Next Period ▶️", key="next_period"):
-            st.session_state.period_index = min(n_periods - 1, st.session_state.period_index + 1)
+        elif choice == "next_period":
+            st.session_state.period_index = min(
+                n_periods - 1, st.session_state.period_index + 1
+            )
+        # Reset the control for next use
+        st.session_state.nav = None
+
+    # Center the navigation control under the map
+    nav_cols = st.columns([5, 2, 5])
+    with nav_cols[1]:
+        st.segmented_control(
+            "Navigation",
+            options=list(nav_icons.keys()),
+            format_func=lambda key: nav_icons[key],
+            key="nav",
+            label_visibility="collapsed",
+            on_change=handle_nav,
+        )
 
     # Display period metadata
     st.subheader("Period Information")
@@ -196,7 +216,6 @@ def main():
         st.warning("No period information found.")
     else:
         st.dataframe(info_df, use_container_width=True)
-
 
 
 if __name__ == "__main__":
