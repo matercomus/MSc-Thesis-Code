@@ -15,6 +15,7 @@ are in the same directory as this script.
 """
 
 import streamlit as st
+
 st.set_page_config(page_title="Trajectory Previewer", layout="wide")
 import polars as pl
 import plotly.express as px
@@ -22,6 +23,7 @@ import plotly.express as px
 # Paths to Parquet files
 PERIOD_FILE = "periods_in_beijing.parquet"
 DATA_FILE = "cleaned_with_period_id_in_beijing.parquet"
+
 
 @st.cache_data
 def get_period_ids(lp: str) -> list:
@@ -36,6 +38,7 @@ def get_period_ids(lp: str) -> list:
     )
     return df["period_id"].to_list()
 
+
 @st.cache_data
 def get_period_info(lp: str, period_id) -> pl.DataFrame:
     """Return the metadata row for a given license plate and period_id."""
@@ -44,6 +47,7 @@ def get_period_info(lp: str, period_id) -> pl.DataFrame:
         .filter((pl.col("license_plate") == lp) & (pl.col("period_id") == period_id))
         .collect()
     )
+
 
 @st.cache_data
 def get_trajectory(lp: str, period_id) -> pl.DataFrame:
@@ -56,17 +60,79 @@ def get_trajectory(lp: str, period_id) -> pl.DataFrame:
         .collect()
     )
 
+
+@st.cache_data
+def get_sample_license_plates(limit: int = 100) -> list:
+    """Return a sorted list of up to `limit` unique license plates."""
+    df = (
+        pl.scan_parquet(PERIOD_FILE)
+        .select("license_plate")
+        .unique()
+        .sort("license_plate")
+        .limit(limit)
+        .collect()
+    )
+    return df["license_plate"].to_list()
+
+
 def main():
     # Sidebar controls
     st.sidebar.header("Controls")
-    lp = st.sidebar.text_input("License Plate", value="")
-    if not lp:
+    # Navigation instructions
+    st.sidebar.markdown(
+        "**Navigation**  \n"
+        "⬆️ Prev Plate | ⬇️ Next Plate  \n"
+        "◀️ Prev Period | ▶️ Next Period"
+    )
+
+    # Sample license plates preview (first N sorted)
+    SAMPLE_LP_LIMIT = 100
+    if "lp_list" not in st.session_state:
+        st.session_state.lp_list = get_sample_license_plates(SAMPLE_LP_LIMIT)
+        st.session_state.lp_list_index = 0
+
+    # Initialize license plate input on first run
+    if "lp_input" not in st.session_state:
+        init_lp = st.session_state.lp_list[0]
+        st.session_state.lp_input = init_lp
+        st.session_state.last_lp = init_lp
+        st.session_state.period_index = 1
+
+    # License plate nav buttons
+    col_a, col_b, col_c = st.sidebar.columns([1, 2, 1])
+    with col_a:
+        if col_a.button("⬆️", key="prev_lp"):
+            if st.session_state.lp_list_index > 0:
+                st.session_state.lp_list_index -= 1
+                new_lp = st.session_state.lp_list[st.session_state.lp_list_index]
+                st.session_state.lp_input = new_lp
+                st.session_state.last_lp = new_lp
+                st.session_state.period_index = 1
+    with col_c:
+        if col_c.button("⬇️", key="next_lp"):
+            if st.session_state.lp_list_index < len(st.session_state.lp_list) - 1:
+                st.session_state.lp_list_index += 1
+                new_lp = st.session_state.lp_list[st.session_state.lp_list_index]
+                st.session_state.lp_input = new_lp
+                st.session_state.last_lp = new_lp
+                st.session_state.period_index = 1
+    with col_b:
+        idx = st.session_state.lp_list_index + 1
+        total = len(st.session_state.lp_list)
+        col_b.markdown(f"Plate {idx} / {total}")
+
+    # License plate input (syncs with nav list)
+    lp = st.sidebar.text_input("License Plate", key="lp_input")
+    # Sync manual input change
+    if st.session_state.lp_input != st.session_state.last_lp:
+        st.session_state.last_lp = st.session_state.lp_input
+        st.session_state.period_index = 1
+
+    # Validate license plate
+    if not st.session_state.lp_input:
         st.sidebar.info("Please enter a license plate to begin.")
         return
-    # Reset period index when license plate changes
-    if st.session_state.get("last_lp") != lp:
-        st.session_state.period_index = 1
-        st.session_state.last_lp = lp
+    lp = st.session_state.lp_input
 
     # Fetch periods
     try:
@@ -78,12 +144,29 @@ def main():
         st.sidebar.warning(f"No periods found for license plate '{lp}'.")
         return
 
-    # Period selector
-    default_idx = st.session_state.get("period_index", 1)
-    period_idx = st.sidebar.slider("Select Period", 1, len(period_ids), value=default_idx)
-    st.session_state.period_index = period_idx
-    period_id = period_ids[period_idx - 1]
-    st.sidebar.write(f"Period ID: {period_id}")
+    # Period selector: arrows + slider, guard single-period case
+    n_periods = len(period_ids)
+    if n_periods > 1:
+        default_idx = st.session_state.get("period_index", 1)
+        col_p1, col_p2, col_p3 = st.sidebar.columns([1, 4, 1])
+        with col_p1:
+            if col_p1.button("◀️", key="prev_period"):
+                if st.session_state.period_index > 1:
+                    st.session_state.period_index -= 1
+        with col_p2:
+            period_idx = col_p2.slider("Select Period", 1, n_periods, value=default_idx)
+            st.session_state.period_index = period_idx
+        with col_p3:
+            if col_p3.button("▶️", key="next_period"):
+                if st.session_state.period_index < n_periods:
+                    st.session_state.period_index += 1
+        period_id = period_ids[st.session_state.period_index - 1]
+        st.sidebar.markdown(f"Period ID: {period_id}")
+    else:
+        # Only one period, no navigation
+        period_id = period_ids[0]
+        st.session_state.period_index = 1
+        st.sidebar.markdown(f"Only one period: {period_id}")
 
     # Main display: plot and metadata side by side
     st.subheader(f"Trajectory: {lp} | Period: {period_id}")
@@ -129,6 +212,7 @@ def main():
         st.warning("No period information found.")
     else:
         st.dataframe(info_df, use_container_width=True)
+
 
 if __name__ == "__main__":
     main()
