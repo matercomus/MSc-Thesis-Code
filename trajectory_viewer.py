@@ -84,6 +84,10 @@ def main():
         "⬆️ Prev Plate | ⬇️ Next Plate  \n"
         "◀️ Prev Period | ▶️ Next Period"
     )
+    # Map background selector
+    bg_option = st.sidebar.selectbox(
+        "Map Background", ["White", "OpenStreetMap"], index=1
+    )
 
     # Sample license plates preview (first N sorted)
     SAMPLE_LP_LIMIT = 100
@@ -181,20 +185,40 @@ def main():
         st.warning("No trajectory data available for this period.")
         return
 
-    # Build plot
+    # Build plot with optional map background
     lon_list = traj_df["longitude"].to_list()
     lat_list = traj_df["latitude"].to_list()
-    fig = px.line(x=lon_list, y=lat_list)
-    fig.update_traces(line_color="red")
-    fig.update_layout(
-        plot_bgcolor="white",
-        paper_bgcolor="white",
-        xaxis_title="Longitude",
-        yaxis_title="Latitude",
-        margin=dict(l=0, r=0, t=0, b=0),
-    )
-    fig.update_xaxes(showgrid=False)
-    fig.update_yaxes(showgrid=False)
+    if bg_option == "OpenStreetMap":
+        import plotly.graph_objects as go
+        # Center map on trajectory
+        center_lat = sum(lat_list) / len(lat_list)
+        center_lon = sum(lon_list) / len(lon_list)
+        fig = go.Figure(
+            go.Scattermapbox(
+                lat=lat_list,
+                lon=lon_list,
+                mode="lines",
+                line=dict(color="red", width=2),
+            )
+        )
+        fig.update_layout(
+            mapbox_style="open-street-map",
+            mapbox_center={"lat": center_lat, "lon": center_lon},
+            mapbox_zoom=12,
+            margin={"l": 0, "r": 0, "t": 0, "b": 0},
+        )
+    else:
+        fig = px.line(x=lon_list, y=lat_list)
+        fig.update_traces(line_color="red")
+        fig.update_layout(
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            xaxis_title="Longitude",
+            yaxis_title="Latitude",
+            margin=dict(l=0, r=0, t=0, b=0),
+        )
+        fig.update_xaxes(showgrid=False)
+        fig.update_yaxes(showgrid=False)
 
     # Load metadata
     try:
