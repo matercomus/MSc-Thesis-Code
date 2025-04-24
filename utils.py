@@ -8,6 +8,18 @@ import sys
 
 # --- Constants ---
 EARTH_RADIUS_KM = 6371.0
+from math import radians, sin, cos, sqrt, atan2
+
+def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """
+    Calculate great-circle distance between two points in km using Haversine formula.
+    """
+    phi1, phi2 = radians(lat1), radians(lat2)
+    dphi = radians(lat2 - lat1)
+    dlambda = radians(lon2 - lon1)
+    a = sin(dphi / 2) ** 2 + cos(phi1) * cos(phi2) * sin(dlambda / 2) ** 2
+    c = 2 * atan2(sqrt(a), sqrt(1 - a))
+    return EARTH_RADIUS_KM * c
 
 
 # --- Functions ---
@@ -312,8 +324,10 @@ def summarize_periods(df: pl.DataFrame) -> pl.DataFrame:
     """
     Aggregate statistics per license_plate, occupancy_status, period_id.
     Expects columns: license_plate, occupancy_status, period_id,
-                     timestamp, implied_speed_kph, time_diff_seconds, distance_km.
-    Returns duration, count_rows, avg_implied_speed, sum_time_diff, sum_distance per group.
+                     timestamp, implied_speed_kph, time_diff_seconds, distance_km,
+                     latitude, longitude.
+    Returns start_time, end_time, duration, count_rows, avg_implied_speed, sum_time_diff,
+            sum_distance, straight_line_distance_km per group.
     """
     if df.is_empty():
         # Return empty with expected schema if input empty
@@ -322,28 +336,69 @@ def summarize_periods(df: pl.DataFrame) -> pl.DataFrame:
                 "license_plate": pl.Series([], dtype=pl.Utf8),
                 "occupancy_status": pl.Series([], dtype=pl.Utf8),
                 "period_id": pl.Series([], dtype=pl.Int32),
+                "start_time": pl.Series([], dtype=pl.Datetime),
+                "end_time": pl.Series([], dtype=pl.Datetime),
                 "duration": pl.Series([], dtype=pl.Duration),
                 "count_rows": pl.Series([], dtype=pl.UInt32),
                 "avg_implied_speed": pl.Series([], dtype=pl.Float64),
                 "sum_time_diff": pl.Series([], dtype=pl.Float64),
                 "sum_distance": pl.Series([], dtype=pl.Float64),
+                "straight_line_distance_km": pl.Series([], dtype=pl.Float64),
             }
         )
 
-    grouped = (
-        df.group_by(["license_plate", "occupancy_status", "period_id"]).agg(
+    # Determine if latitude/longitude columns are available
+    has_latlon = ("latitude" in df.columns) and ("longitude" in df.columns)
+
+    # Build aggregation expressions
+    agg_exprs = [
+        pl.col("timestamp").min().alias("start_time"),
+        pl.col("timestamp").max().alias("end_time"),
+        pl.count().alias("count_rows"),
+        pl.col("implied_speed_kph").mean().alias("avg_implied_speed"),
+        pl.col("time_diff_seconds").sum().alias("sum_time_diff"),
+        pl.col("distance_km").sum().alias("sum_distance"),
+    ]
+    if has_latlon:
+        agg_exprs.extend(
             [
-                (pl.col("timestamp").max() - pl.col("timestamp").min()).alias(
-                    "duration"
-                ),
-                pl.count().alias("count_rows"),
-                pl.col("implied_speed_kph").mean().alias("avg_implied_speed"),
-                pl.col("time_diff_seconds").sum().alias("sum_time_diff"),
-                pl.col("distance_km").sum().alias("sum_distance"),
+                pl.col("latitude").first().alias("start_latitude"),
+                pl.col("longitude").first().alias("start_longitude"),
+                pl.col("latitude").last().alias("end_latitude"),
+                pl.col("longitude").last().alias("end_longitude"),
             ]
         )
-        # Optionally sort output
+
+    grouped = (
+        df.group_by(["license_plate", "occupancy_status", "period_id"])
+        .agg(agg_exprs)
         .sort(["license_plate", "period_id"])
     )
+
+    # Compute duration
+    grouped = grouped.with_columns(
+        (pl.col("end_time") - pl.col("start_time")).alias("duration")
+    )
+
+    # Compute straight line distance if latitude/longitude available
+    if has_latlon:
+        start_lats = grouped["start_latitude"].to_list()
+        start_lons = grouped["start_longitude"].to_list()
+        end_lats = grouped["end_latitude"].to_list()
+        end_lons = grouped["end_longitude"].to_list()
+
+        distances = [
+            haversine_distance(lat1, lon1, lat2, lon2)
+            for lat1, lon1, lat2, lon2 in zip(start_lats, start_lons, end_lats, end_lons)
+        ]
+
+        grouped = grouped.with_columns(
+            pl.Series("straight_line_distance_km", distances)
+        )
+
+        # Drop intermediate latitude/longitude columns
+        grouped = grouped.drop(
+            ["start_latitude", "start_longitude", "end_latitude", "end_longitude"]
+        )
 
     return grouped
