@@ -76,14 +76,6 @@ def get_sample_license_plates(limit: int = 100) -> list:
 
 
 def main():
-    # Sidebar controls
-    st.sidebar.header("Controls")
-    # Map background selector
-    bg_option = st.sidebar.selectbox(
-        "Map Background", ["White", "OpenStreetMap"], index=1
-    )
-
-    # --------- License Plate & Period Navigation ---------
     # Initialize navigation state
     SAMPLE_LP_LIMIT = 100
     lp_list = get_sample_license_plates(SAMPLE_LP_LIMIT)
@@ -93,60 +85,40 @@ def main():
     if "period_index" not in st.session_state:
         st.session_state.period_index = 0
 
-    # Callback functions
-    def prev_lp():
+    # Navigation callbacks
+    def prev_plate():
         st.session_state.lp_index = max(0, st.session_state.lp_index - 1)
         st.session_state.period_index = 0
 
-    def next_lp():
+    def next_plate():
         st.session_state.lp_index = min(n_lp - 1, st.session_state.lp_index + 1)
         st.session_state.period_index = 0
 
-    # License Plate controls
-    st.sidebar.subheader("License Plate")
-    lp_cols = st.sidebar.columns([1, 4, 1])
-    with lp_cols[0]:
-        lp_cols[0].button("⬆️ Prev", on_click=prev_lp, key="prev_lp_btn")
-    with lp_cols[1]:
-        st.sidebar.markdown(f"**{lp_list[st.session_state.lp_index]}**")
-    with lp_cols[2]:
-        lp_cols[2].button("Next ⬇️", on_click=next_lp, key="next_lp_btn")
+    # Current license plate
     lp = lp_list[st.session_state.lp_index]
 
-    # Fetch periods for selected license plate
+    # Fetch period IDs
     try:
         period_ids = get_period_ids(lp)
     except Exception as e:
-        st.sidebar.error(f"Error loading periods: {e}")
+        st.error(f"Error loading periods for plate '{lp}': {e}")
         return
     if not period_ids:
-        st.sidebar.warning(f"No periods found for license plate '{lp}'.")
+        st.warning(f"No periods found for license plate '{lp}'.")
         return
+
+    # Clamp period index
     n_periods = len(period_ids)
-
-    # Callback for period nav
-    def prev_period():
-        st.session_state.period_index = max(0, st.session_state.period_index - 1)
-
-    def next_period():
-        st.session_state.period_index = min(n_periods - 1, st.session_state.period_index + 1)
-
-    # Period controls
-    st.sidebar.subheader("Period")
-    period_cols = st.sidebar.columns([1, 4, 1])
-    with period_cols[0]:
-        period_cols[0].button("◀️ Prev", on_click=prev_period, key="prev_period_btn")
-    with period_cols[1]:
-        st.sidebar.markdown(f"**{period_ids[st.session_state.period_index]}**")
-    with period_cols[2]:
-        period_cols[2].button("Next ▶️", on_click=next_period, key="next_period_btn")
+    if st.session_state.period_index >= n_periods:
+        st.session_state.period_index = n_periods - 1
+    if st.session_state.period_index < 0:
+        st.session_state.period_index = 0
     period_id = period_ids[st.session_state.period_index]
-    st.sidebar.markdown(f"_Total periods: {n_periods}_")
 
-    # Main display: plot and metadata side by side
-    st.subheader(f"Trajectory: {lp} | Period: {period_id}")
-
-    # Load trajectory
+    # Map background toggle (now below map)
+    # Let user choose map background: OpenStreetMap or plain plot
+    bg_osm = st.checkbox("Use OpenStreetMap background", value=True)
+    # Load trajectory data
     try:
         traj_df = get_trajectory(lp, period_id)
     except Exception as e:
@@ -156,32 +128,30 @@ def main():
         st.warning("No trajectory data available for this period.")
         return
 
-    # Build plot with optional map background
     lon_list = traj_df["longitude"].to_list()
     lat_list = traj_df["latitude"].to_list()
-    if bg_option == "OpenStreetMap":
+
+    # Build plot
+    if bg_osm:
         import plotly.graph_objects as go
-        # Center map on trajectory
         center_lat = sum(lat_list) / len(lat_list)
         center_lon = sum(lon_list) / len(lon_list)
-        # Use Maplibre scattermap on 'map' subplot
+        # Use deprecated scattermapbox for compatibility
         fig = go.Figure(
-            go.Scattermap(
+            go.Scattermapbox(
                 lat=lat_list,
                 lon=lon_list,
                 mode="lines",
-                line=dict(color="red", width=2),
-                subplot="map",
+                line=dict(color="red", width=2)
             )
         )
         fig.update_layout(
-            map_style="open-street-map",
-            map_center={"lat": center_lat, "lon": center_lon},
-            map_zoom=12,
-            margin={"l": 0, "r": 0, "t": 0, "b": 0},
+            mapbox_style="open-street-map",
+            mapbox_center={"lat": center_lat, "lon": center_lon},
+            mapbox_zoom=12,
+            margin={"l": 0, "r": 0, "t": 0, "b": 0}
         )
     else:
-        # Simple white-background plot
         fig = px.line(x=lon_list, y=lat_list)
         fig.update_traces(line_color="red")
         fig.update_layout(
@@ -194,22 +164,39 @@ def main():
         fig.update_xaxes(showgrid=False)
         fig.update_yaxes(showgrid=False)
 
-    # Load metadata
+    # Display map
+    st.plotly_chart(fig, use_container_width=True)
+    st.markdown(f"**Trajectory: {lp} | Period: {period_id} ({st.session_state.period_index+1}/{n_periods})**")
+
+    # Combined navigation controls below map using buttons
+    nav_cols = st.columns([1, 6, 6, 1])
+    # License-plate navigation
+    with nav_cols[1]:
+        if st.button("⬆️ Previous Plate", key="prev_plate"):
+            st.session_state.lp_index = max(0, st.session_state.lp_index - 1)
+            st.session_state.period_index = 0
+        if st.button("Next Plate ⬇️", key="next_plate"):
+            st.session_state.lp_index = min(n_lp - 1, st.session_state.lp_index + 1)
+            st.session_state.period_index = 0
+    # Period navigation
+    with nav_cols[2]:
+        if st.button("◀️ Previous Period", key="prev_period"):
+            st.session_state.period_index = max(0, st.session_state.period_index - 1)
+        if st.button("Next Period ▶️", key="next_period"):
+            st.session_state.period_index = min(n_periods - 1, st.session_state.period_index + 1)
+
+    # Display period metadata
+    st.subheader("Period Information")
     try:
         info_df = get_period_info(lp, period_id)
     except Exception as e:
         st.error(f"Error loading period information: {e}")
         return
-
-    # Display plot full-width
-    st.plotly_chart(fig, use_container_width=True)
-
-    # Display period metadata below
-    st.subheader("Period Information")
     if info_df.is_empty():
         st.warning("No period information found.")
     else:
         st.dataframe(info_df, use_container_width=True)
+
 
 
 if __name__ == "__main__":
