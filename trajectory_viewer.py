@@ -78,67 +78,42 @@ def get_sample_license_plates(limit: int = 100) -> list:
 def main():
     # Sidebar controls
     st.sidebar.header("Controls")
-    # Navigation instructions
-    st.sidebar.markdown(
-        "**Navigation**  \n"
-        "⬆️ Prev Plate | ⬇️ Next Plate  \n"
-        "◀️ Prev Period | ▶️ Next Period"
-    )
     # Map background selector
     bg_option = st.sidebar.selectbox(
         "Map Background", ["White", "OpenStreetMap"], index=1
     )
 
-    # Sample license plates preview (first N sorted)
+    # --------- License Plate & Period Navigation ---------
+    # Initialize navigation state
     SAMPLE_LP_LIMIT = 100
-    if "lp_list" not in st.session_state:
-        st.session_state.lp_list = get_sample_license_plates(SAMPLE_LP_LIMIT)
-        st.session_state.lp_list_index = 0
+    lp_list = get_sample_license_plates(SAMPLE_LP_LIMIT)
+    n_lp = len(lp_list)
+    if "lp_index" not in st.session_state:
+        st.session_state.lp_index = 0
+    if "period_index" not in st.session_state:
+        st.session_state.period_index = 0
 
-    # Initialize license plate input on first run
-    if "lp_input" not in st.session_state:
-        init_lp = st.session_state.lp_list[0]
-        st.session_state.lp_input = init_lp
-        st.session_state.last_lp = init_lp
-        st.session_state.period_index = 1
+    # Callback functions
+    def prev_lp():
+        st.session_state.lp_index = max(0, st.session_state.lp_index - 1)
+        st.session_state.period_index = 0
 
-    # License plate nav buttons
-    col_a, col_b, col_c = st.sidebar.columns([1, 2, 1])
-    with col_a:
-        if col_a.button("⬆️", key="prev_lp"):
-            if st.session_state.lp_list_index > 0:
-                st.session_state.lp_list_index -= 1
-                new_lp = st.session_state.lp_list[st.session_state.lp_list_index]
-                st.session_state.lp_input = new_lp
-                st.session_state.last_lp = new_lp
-                st.session_state.period_index = 1
-    with col_c:
-        if col_c.button("⬇️", key="next_lp"):
-            if st.session_state.lp_list_index < len(st.session_state.lp_list) - 1:
-                st.session_state.lp_list_index += 1
-                new_lp = st.session_state.lp_list[st.session_state.lp_list_index]
-                st.session_state.lp_input = new_lp
-                st.session_state.last_lp = new_lp
-                st.session_state.period_index = 1
-    with col_b:
-        idx = st.session_state.lp_list_index + 1
-        total = len(st.session_state.lp_list)
-        col_b.markdown(f"Plate {idx} / {total}")
+    def next_lp():
+        st.session_state.lp_index = min(n_lp - 1, st.session_state.lp_index + 1)
+        st.session_state.period_index = 0
 
-    # License plate input (syncs with nav list)
-    lp = st.sidebar.text_input("License Plate", key="lp_input")
-    # Sync manual input change
-    if st.session_state.lp_input != st.session_state.last_lp:
-        st.session_state.last_lp = st.session_state.lp_input
-        st.session_state.period_index = 1
+    # License Plate controls
+    st.sidebar.subheader("License Plate")
+    lp_cols = st.sidebar.columns([1, 4, 1])
+    with lp_cols[0]:
+        lp_cols[0].button("⬆️ Prev", on_click=prev_lp, key="prev_lp_btn")
+    with lp_cols[1]:
+        st.sidebar.markdown(f"**{lp_list[st.session_state.lp_index]}**")
+    with lp_cols[2]:
+        lp_cols[2].button("Next ⬇️", on_click=next_lp, key="next_lp_btn")
+    lp = lp_list[st.session_state.lp_index]
 
-    # Validate license plate
-    if not st.session_state.lp_input:
-        st.sidebar.info("Please enter a license plate to begin.")
-        return
-    lp = st.session_state.lp_input
-
-    # Fetch periods
+    # Fetch periods for selected license plate
     try:
         period_ids = get_period_ids(lp)
     except Exception as e:
@@ -147,30 +122,26 @@ def main():
     if not period_ids:
         st.sidebar.warning(f"No periods found for license plate '{lp}'.")
         return
-
-    # Period selector: arrows + slider, guard single-period case
     n_periods = len(period_ids)
-    if n_periods > 1:
-        default_idx = st.session_state.get("period_index", 1)
-        col_p1, col_p2, col_p3 = st.sidebar.columns([1, 4, 1])
-        with col_p1:
-            if col_p1.button("◀️", key="prev_period"):
-                if st.session_state.period_index > 1:
-                    st.session_state.period_index -= 1
-        with col_p2:
-            period_idx = col_p2.slider("Select Period", 1, n_periods, value=default_idx)
-            st.session_state.period_index = period_idx
-        with col_p3:
-            if col_p3.button("▶️", key="next_period"):
-                if st.session_state.period_index < n_periods:
-                    st.session_state.period_index += 1
-        period_id = period_ids[st.session_state.period_index - 1]
-        st.sidebar.markdown(f"Period ID: {period_id}")
-    else:
-        # Only one period, no navigation
-        period_id = period_ids[0]
-        st.session_state.period_index = 1
-        st.sidebar.markdown(f"Only one period: {period_id}")
+
+    # Callback for period nav
+    def prev_period():
+        st.session_state.period_index = max(0, st.session_state.period_index - 1)
+
+    def next_period():
+        st.session_state.period_index = min(n_periods - 1, st.session_state.period_index + 1)
+
+    # Period controls
+    st.sidebar.subheader("Period")
+    period_cols = st.sidebar.columns([1, 4, 1])
+    with period_cols[0]:
+        period_cols[0].button("◀️ Prev", on_click=prev_period, key="prev_period_btn")
+    with period_cols[1]:
+        st.sidebar.markdown(f"**{period_ids[st.session_state.period_index]}**")
+    with period_cols[2]:
+        period_cols[2].button("Next ▶️", on_click=next_period, key="next_period_btn")
+    period_id = period_ids[st.session_state.period_index]
+    st.sidebar.markdown(f"_Total periods: {n_periods}_")
 
     # Main display: plot and metadata side by side
     st.subheader(f"Trajectory: {lp} | Period: {period_id}")
