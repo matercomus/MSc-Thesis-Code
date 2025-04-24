@@ -193,21 +193,24 @@ def main():
         # Center map on trajectory
         center_lat = sum(lat_list) / len(lat_list)
         center_lon = sum(lon_list) / len(lon_list)
+        # Use Maplibre scattermap on 'map' subplot
         fig = go.Figure(
-            go.Scattermapbox(
+            go.Scattermap(
                 lat=lat_list,
                 lon=lon_list,
                 mode="lines",
                 line=dict(color="red", width=2),
+                subplot="map",
             )
         )
         fig.update_layout(
-            mapbox_style="open-street-map",
-            mapbox_center={"lat": center_lat, "lon": center_lon},
-            mapbox_zoom=12,
+            map_style="open-street-map",
+            map_center={"lat": center_lat, "lon": center_lon},
+            map_zoom=12,
             margin={"l": 0, "r": 0, "t": 0, "b": 0},
         )
     else:
+        # Simple white-background plot
         fig = px.line(x=lon_list, y=lat_list)
         fig.update_traces(line_color="red")
         fig.update_layout(
