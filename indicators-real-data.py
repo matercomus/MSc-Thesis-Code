@@ -9,6 +9,9 @@ app = marimo.App(width="full")
 @app.cell
 def _():
     import polars as pl
+
+    # Enable global string cache before any Categorical operations
+    pl.enable_string_cache()
     from utils import (
         configure_logging,
         add_time_distance_calcs,
@@ -73,18 +76,6 @@ def _(results):
 
 @app.cell
 def _(pl, results):
-    results.filter(pl.col("is_temporal_gap") | pl.col("is_position_jump"))
-    return
-
-
-@app.cell
-def _(pl, results):
-    results.filter(pl.col("is_temporal_gap") & pl.col("is_position_jump"))
-    return
-
-
-@app.cell
-def _(pl, results):
     # Compute all unique flagged license plates
     flagged_license_plates = (
         results.filter(pl.col("is_temporal_gap") | pl.col("is_position_jump"))
@@ -117,15 +108,17 @@ def _(cleaned_lazy_df):
 @app.cell
 def _(add_period_id, cleaned_lazy_df, summarize_periods):
     # Add period_id to cleaned data
-    period_lazy_df = (
-        cleaned_lazy_df.collect()
-        .pipe(add_period_id)
-        .pipe(summarize_periods)
-        .lazy()
+    period_df = (
+        cleaned_lazy_df.collect().pipe(add_period_id).pipe(summarize_periods)
     )
+    period_lazy_df = period_df.lazy()
+    return period_df, period_lazy_df
 
-    period_df = period_lazy_df.collect().sort("license_plate", "start_time")
-    return (period_df,)
+
+@app.cell
+def _(period_lazy_df):
+    period_lazy_df.sink_parquet("periods_in_beijing.parquet")
+    return
 
 
 @app.cell
@@ -135,10 +128,30 @@ def _(period_df):
 
 
 @app.cell
-def _(period_df, pl):
-    period_df.filter(pl.col("license_plate") == "京BN8859").sort(
-        "start_time"
-    ).head(50)
+def _(cleaned_lazy_df, period_lazy_df, pl):
+    # Add period_id to cleaned_lazy_df by merging with period_lazy_df based on timestamp within start and end time, and license plate
+    cleaned_with_period_id_df = cleaned_lazy_df.join(
+        period_lazy_df.select(
+            ["license_plate", "start_time", "end_time", "period_id"]
+        ),
+        on=["license_plate"],
+        how="left",
+    ).filter(
+        (pl.col("timestamp") >= pl.col("start_time"))
+        & (pl.col("timestamp") <= pl.col("end_time"))
+    )
+
+    # Collect the final DataFrame with period_id column
+    with_period_id_df = cleaned_with_period_id_df.collect()
+    with_period_id_df.head(50)
+    return (cleaned_with_period_id_df,)
+
+
+@app.cell
+def _(cleaned_with_period_id_df):
+    cleaned_with_period_id_df.sink_parquet(
+        "cleaned_with_period_id_in_beijing.parquet"
+    )
     return
 
 
