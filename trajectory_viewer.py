@@ -120,14 +120,16 @@ def main():
     if st.session_state.period_index < 0:
         st.session_state.period_index = 0
     period_id = period_ids[st.session_state.period_index]
+
     # Display trajectory header
     st.markdown(f"**Trajectory: {lp} | Period: {period_id} ({st.session_state.period_index+1}/{n_periods})**")
 
     # Toggle map background
     bg_osm = st.checkbox("Show map background (OSM)", value=True, key="bg_osm")
+
     # Straight-line to sum-distance (SLD) ratio range selection
     sl_min, sl_max = st.slider(
-        "SLD Ratio Range", min_value=0.0, max_value=1.0, value=(0.0, 1.0), step=0.01
+        "SLD Ratio Range", min_value=-2.0, max_value=2.0, value=(-2.0, 2.0), step=0.01
     )
     # Flag abnormal trajectories based on SLD ratio
     try:
