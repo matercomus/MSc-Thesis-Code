@@ -400,5 +400,13 @@ def summarize_periods(df: pl.DataFrame) -> pl.DataFrame:
         grouped = grouped.drop(
             ["start_latitude", "start_longitude", "end_latitude", "end_longitude"]
         )
+        # Compute straight-line to sum-distance ratio
+        grouped = grouped.with_columns(
+            (
+                pl.when(pl.col("sum_distance") > 0)
+                .then(pl.col("straight_line_distance_km") / pl.col("sum_distance"))
+                .otherwise(0.0)
+            ).alias("sld_ratio")
+        )
 
     return grouped

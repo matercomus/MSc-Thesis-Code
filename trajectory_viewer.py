@@ -10,7 +10,7 @@ Requirements:
 Usage:
     streamlit run trajectory_viewer.py
 
-Ensure that the Parquet files 'periods_in_beijing.parquet' and 'cleaned_with_period_id_in_beijing.parquet'
+Ensure that the Parquet files 'periods_with_sld_ratio.parquet' and 'cleaned_with_period_id_in_beijing.parquet'
 are in the same directory as this script.
 """
 
@@ -21,7 +21,8 @@ import plotly.express as px
 st.set_page_config(page_title="Trajectory Previewer", layout="wide")
 
 # Paths to Parquet files
-PERIOD_FILE = "periods_in_beijing.parquet"
+# Use enriched periods file with straight-line to sum-distance ratio
+PERIOD_FILE = "periods_with_sld_ratio.parquet"
 DATA_FILE = "cleaned_with_period_id_in_beijing.parquet"
 
 
@@ -124,6 +125,20 @@ def main():
 
     # Toggle map background
     bg_osm = st.checkbox("Show map background (OSM)", value=True, key="bg_osm")
+    # Straight-line to sum-distance (SLD) ratio range selection
+    sl_min, sl_max = st.slider(
+        "SLD Ratio Range", min_value=0.0, max_value=1.0, value=(0.0, 1.0), step=0.01
+    )
+    # Flag abnormal trajectories based on SLD ratio
+    try:
+        info_df = get_period_info(lp, period_id)
+        sld_ratio = info_df["sld_ratio"].to_list()[0]
+        if sld_ratio < sl_min or sld_ratio > sl_max:
+            st.markdown(
+                "<h3 style='color:red'>ABNORMAL (SLD)</h3>", unsafe_allow_html=True
+            )
+    except Exception:
+        pass
     try:
         traj_df = get_trajectory(lp, period_id)
     except Exception as e:

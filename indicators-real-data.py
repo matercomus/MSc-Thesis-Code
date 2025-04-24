@@ -117,7 +117,10 @@ def _(add_period_id, cleaned_lazy_df, summarize_periods):
 
 @app.cell
 def _(period_lazy_df):
+    # Sink periods with summarized metrics
     period_lazy_df.sink_parquet("periods_in_beijing.parquet")
+    # Also save with straight-line to sum-distance ratio
+    period_lazy_df.sink_parquet("periods_with_sld_ratio.parquet")
     return
 
 
