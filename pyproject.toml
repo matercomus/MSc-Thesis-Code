@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "pytest>=8.3.5",
+    # Required for outlier detection
+    "scikit-learn>=1.0.0",
 ]
 
 [tool.marimo.experimental]

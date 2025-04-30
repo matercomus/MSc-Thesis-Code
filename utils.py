@@ -9,6 +9,14 @@ import sys
 # --- Constants ---
 EARTH_RADIUS_KM = 6371.0
 from math import radians, sin, cos, sqrt, atan2
+import pandas as pd
+import numpy as np
+try:
+    from sklearn.ensemble import IsolationForest
+    from sklearn.preprocessing import StandardScaler
+except ImportError:
+    IsolationForest = None  # type: ignore
+    StandardScaler = None  # type: ignore
 
 def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """
@@ -410,3 +418,84 @@ def summarize_periods(df: pl.DataFrame) -> pl.DataFrame:
         )
 
     return grouped
+ 
+def detect_outliers_pd(
+    df: pd.DataFrame,
+    contamination: float = 0.05,
+    random_state: int = 42,
+    n_estimators: int = 100,
+) -> pd.Series:
+    """
+    Detect trajectory outliers using Isolation Forest over features: speed, acceleration, direction change.
+    Returns a pandas Series of 1 (inlier) or -1 (outlier) indexed by the input DataFrame index.
+    """
+    # Ensure dependencies available
+    if IsolationForest is None or StandardScaler is None:
+        raise ImportError(
+            "scikit-learn is required for detect_outliers_pd. Please install scikit-learn."
+        )
+    # Prepare data
+    df_copy = df.copy()
+    df_copy['timestamp'] = pd.to_datetime(df_copy['timestamp'])
+    df_copy.sort_values(['license_plate', 'timestamp'], inplace=True)
+
+    # Compute features: speed, acceleration, direction change
+    # Use implied_speed_kph if available, otherwise compute speed from distance and time diff
+    if 'implied_speed_kph' in df_copy.columns and 'time_diff_seconds' in df_copy.columns:
+        speed = df_copy['implied_speed_kph']
+    else:
+        # fallback: compute from lat/lon
+        lat = np.radians(df_copy['latitude'])
+        lon = np.radians(df_copy['longitude'])
+        dlat = lat.diff()
+        dlon = lon.diff()
+        a = np.sin(dlat / 2) ** 2 + np.cos(lat.shift(1)) * np.cos(lat) * np.sin(dlon / 2) ** 2
+        c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+        distance = EARTH_RADIUS_KM * c
+        time_diff = df_copy['timestamp'].diff().dt.total_seconds() / 3600.0
+        speed = distance / time_diff
+    # Acceleration (km/h per hour)
+    if 'time_diff_seconds' in df_copy.columns:
+        time_diff_h = df_copy['time_diff_seconds'] / 3600.0
+        acceleration = speed.diff() / time_diff_h
+    else:
+        acceleration = speed.diff()
+    # Direction change
+    lat_rad = np.radians(df_copy['latitude'])
+    lon_rad = np.radians(df_copy['longitude'])
+    dlat = lat_rad.diff()
+    dlon = lon_rad.diff()
+    direction = np.degrees(np.arctan2(dlon, dlat))
+    direction_change = direction.diff().abs()
+
+    # Reset at new trajectories
+    new_traj = df_copy['license_plate'] != df_copy['license_plate'].shift(1)
+    speed[new_traj] = np.nan
+    acceleration[new_traj] = np.nan
+    direction_change[new_traj] = np.nan
+
+    # Prepare feature matrix
+    feat = pd.DataFrame({
+        'speed': speed,
+        'acceleration': acceleration,
+        'direction_change': direction_change,
+    }).replace([np.inf, -np.inf], np.nan).dropna()
+    if feat.empty:
+        # No valid data points, mark all as inliers
+        return pd.Series(1, index=df_copy.index)
+
+    # Normalize features
+    scaler = StandardScaler()
+    scaled = scaler.fit_transform(feat)
+    # Isolation Forest
+    clf = IsolationForest(
+        contamination=contamination,
+        random_state=random_state,
+        n_estimators=n_estimators,
+    )
+    outlier_labels = clf.fit_predict(scaled)
+
+    # Build result series (1=inlier, -1=outlier)
+    result = pd.Series(1, index=df_copy.index)
+    result.loc[feat.index] = outlier_labels
+    return result

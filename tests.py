@@ -417,6 +417,25 @@ def test_summarize_periods_empty():
     )
     summary = summarize_periods(empty_df)
     assert summary.is_empty()
+    
+def test_detect_outliers_pd_basic():
+    import pytest
+    pytest.importorskip("sklearn", reason="scikit-learn is required for outlier detection tests")
+    import pandas as pd
+    from utils import detect_outliers_pd
+    # Simple linear trajectory for a single vehicle
+    df = pd.DataFrame({
+        'license_plate': ['A', 'A', 'A'],
+        'timestamp': ['2023-01-01T00:00:00'] * 3,
+        'latitude': [0.0, 1.0, 2.0],
+        'longitude': [0.0, 1.0, 2.0],
+    })
+    # Perform outlier detection
+    out = detect_outliers_pd(df, contamination=0.1, random_state=0)
+    # Check output type and values
+    assert isinstance(out, pd.Series)
+    assert len(out) == 3
+    assert set(out.unique()).issubset({-1, 1})
 
 
 def test_period_id_increments_on_license_plate_change():

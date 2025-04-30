@@ -20,6 +20,7 @@ def _():
         select_final_columns,
         add_period_id,
         summarize_periods,
+        detect_outliers_pd,
     )
     return (
         add_abnormality_flags,
@@ -30,6 +31,7 @@ def _():
         pl,
         select_final_columns,
         summarize_periods,
+        detect_outliers_pd,
     )
 
 
@@ -54,8 +56,14 @@ def _(
     add_time_distance_calcs,
     lazy_df,
     select_final_columns,
+    detect_outliers_pd,
 ):
-    # Process pipeline
+    """
+    Process pipeline and detect outliers in the trajectory data.
+    """
+    import pandas as pd
+    import polars as pl
+    # Compute base indicators
     results = (
         lazy_df.sort("license_plate", "timestamp")
         .pipe(add_time_distance_calcs)
@@ -64,6 +72,11 @@ def _(
         .pipe(select_final_columns)
         .collect()
     )
+    # Detect outliers using Isolation Forest on speed, acceleration, and direction change
+    pd_df = results.to_pandas()
+    pd_df["is_outlier"] = detect_outliers_pd(pd_df).values
+    # Convert back to Polars
+    results = pl.from_pandas(pd_df)
     return (results,)
 
 
@@ -158,10 +171,77 @@ def _(cleaned_with_period_id_df):
     return
 
 
-@app.cell
-def _():
-    return
+"""
+When run as a script, bypass Marimo cycles and execute the pipeline directly.
+"""
+def main():
+    import polars as pl
+    import pandas as pd
+    from utils import (
+        configure_logging,
+        add_time_distance_calcs,
+        add_implied_speed,
+        add_abnormality_flags,
+        select_final_columns,
+        add_period_id,
+        summarize_periods,
+        detect_outliers_pd,
+    )
 
+    # Setup
+    pl.enable_string_cache()
+    configure_logging()
+    TEMPORAL_GAP_THRESHOLD = 300  # seconds
+    SPEED_THRESHOLD = 200.0  # km/h
+
+    # Load filtered points
+    lazy_df = pl.scan_parquet("filtered_points_in_beijing.parquet")
+
+    # Compute time, distance, speed, and abnormality flags
+    df_base = (
+        lazy_df.sort("license_plate", "timestamp")
+        .pipe(add_time_distance_calcs)
+        .pipe(add_implied_speed)
+        .pipe(add_abnormality_flags, TEMPORAL_GAP_THRESHOLD, SPEED_THRESHOLD)
+        .pipe(select_final_columns)
+        .collect()
+    )
+
+    # Detect outliers in the trajectory
+    pd_df = df_base.to_pandas()
+    pd_df["is_outlier"] = detect_outliers_pd(pd_df).values
+    results = pl.from_pandas(pd_df)
+
+    # Remove license plates with any temporal gap or position jump
+    flagged_series = results.filter(
+        (pl.col("is_temporal_gap")) | (pl.col("is_position_jump"))
+    ).get_column("license_plate").unique()
+    flagged_list = flagged_series.to_list()
+    cleaned_lazy_df = (
+        results.filter(~pl.col("license_plate").is_in(flagged_list))
+        .drop(["is_temporal_gap", "is_position_jump"])
+        .lazy()
+    )
+    cleaned_lazy_df.sink_parquet("cleaned_points_in_beijing.parquet")
+
+    # Summarize periods and compute straight-line distance ratios
+    period_df = cleaned_lazy_df.collect().pipe(add_period_id).pipe(summarize_periods)
+    period_lazy_df = period_df.lazy()
+    period_lazy_df.sink_parquet("periods_in_beijing.parquet")
+    period_lazy_df.sink_parquet("periods_with_sld_ratio.parquet")
+
+    # Attach period_id back to cleaned points and sink
+    cleaned_with_period_id_df = cleaned_lazy_df.join(
+        period_lazy_df.select(["license_plate", "start_time", "end_time", "period_id"]),
+        on=["license_plate"],
+        how="left",
+    ).filter(
+        (pl.col("timestamp") >= pl.col("start_time")) & (pl.col("timestamp") <= pl.col("end_time"))
+    )
+    cleaned_with_period_id_df.sink_parquet(
+        "cleaned_with_period_id_in_beijing.parquet"
+    )
+    print("Pipeline completed: parquet files written.")
 
 if __name__ == "__main__":
-    app.run()
+    main()
