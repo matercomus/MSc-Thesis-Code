@@ -138,13 +138,27 @@ def main():
     sl_min, sl_max = st.slider(
         "SLD Ratio Range", min_value=-2.0, max_value=2.0, value=(-2.0, 2.0), step=0.01
     )
-    # Flag abnormal trajectories based on SLD ratio
+    # Load period info once
     try:
         info_df = get_period_info(lp, period_id)
-        sld_ratio = info_df["sld_ratio"].to_list()[0]
+    except Exception as e:
+        st.error(f"Error loading period information: {e}")
+        return
+    # Flag abnormal trajectories based on SLD ratio
+    try:
+        sld_ratio = info_df["sld_ratio"][0]
         if sld_ratio < sl_min or sld_ratio > sl_max:
             st.markdown(
                 "<h3 style='color:red'>ABNORMAL (SLD)</h3>", unsafe_allow_html=True
+            )
+    except Exception:
+        pass
+    # Flag abnormal trajectories based on Isolation Forest indicator
+    try:
+        is_if_outlier = info_df["is_traj_outlier"][0]
+        if is_if_outlier:
+            st.markdown(
+                "<h3 style='color:red'>ABNORMAL (IF)</h3>", unsafe_allow_html=True
             )
     except Exception:
         pass
@@ -191,14 +205,6 @@ def main():
 
     # Display map
     st.plotly_chart(fig, use_container_width=True)
-    # Show trajectory table with outlier flags
-    st.subheader("Trajectory Points (with Outlier Flag)")
-    try:
-        st.dataframe(traj_df, use_container_width=True)
-    except Exception:
-        # Fallback if data too large
-        st.text(f"Showing first 100 rows:")
-        st.dataframe(traj_df.head(100), use_container_width=True)
 
     # Combined navigation using a segmented control with Material icons
     nav_icons = {

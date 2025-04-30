@@ -225,7 +225,39 @@ def main():
     cleaned_lazy_df.sink_parquet("cleaned_points_in_beijing.parquet")
 
     # Summarize periods and compute straight-line distance ratios
+    # Base period summary
     period_df = cleaned_lazy_df.collect().pipe(add_period_id).pipe(summarize_periods)
+    # Attach period_id (and period time bounds) to cleaned points for outlier stats
+    cleaned_with_period_id_lazy = (
+        cleaned_lazy_df.join(
+            period_df.lazy().select([
+                "license_plate", "period_id", "start_time", "end_time"
+            ]),
+            on=["license_plate"], how="left"
+        )
+        .filter(
+            (pl.col("timestamp") >= pl.col("start_time")) &
+            (pl.col("timestamp") <= pl.col("end_time"))
+        )
+    )
+    # Compute per-period outlier counts
+    outlier_stats = (
+        cleaned_with_period_id_lazy
+        .group_by(["license_plate", "period_id"])
+        .agg((pl.col("is_outlier") == -1).sum().alias("traj_outlier_count"))
+        .collect()
+    )
+    # Join outlier stats into period summary and compute ratio and flag
+    period_df = (
+        period_df
+        .join(outlier_stats, on=["license_plate", "period_id"], how="left")
+        .with_columns([
+            pl.col("traj_outlier_count").fill_null(0),
+            (pl.col("traj_outlier_count") / pl.col("count_rows")).fill_null(0.0).alias("traj_outlier_ratio"),
+            (pl.col("traj_outlier_count") > 0).alias("is_traj_outlier"),
+        ])
+    )
+    # Sink enriched periods
     period_lazy_df = period_df.lazy()
     period_lazy_df.sink_parquet("periods_in_beijing.parquet")
     period_lazy_df.sink_parquet("periods_with_sld_ratio.parquet")
