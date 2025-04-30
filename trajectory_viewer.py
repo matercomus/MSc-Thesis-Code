@@ -53,13 +53,20 @@ def get_period_info(lp: str, period_id) -> pl.DataFrame:
 @st.cache_data
 def get_trajectory(lp: str, period_id) -> pl.DataFrame:
     """Return the trajectory DataFrame (latitude, longitude, timestamp) for the given license plate and period."""
-    return (
+    # Load the trajectory data, including outlier flags if available
+    df = (
         pl.scan_parquet(DATA_FILE)
         .filter((pl.col("license_plate") == lp) & (pl.col("period_id") == period_id))
-        .select(["latitude", "longitude", "timestamp"])
+        .select([
+            "timestamp",
+            "latitude",
+            "longitude",
+            pl.col("is_outlier").fill_null(1).alias("is_outlier"),
+        ])
         .sort("timestamp")
         .collect()
     )
+    return df
 
 
 @st.cache_data
@@ -184,6 +191,14 @@ def main():
 
     # Display map
     st.plotly_chart(fig, use_container_width=True)
+    # Show trajectory table with outlier flags
+    st.subheader("Trajectory Points (with Outlier Flag)")
+    try:
+        st.dataframe(traj_df, use_container_width=True)
+    except Exception:
+        # Fallback if data too large
+        st.text(f"Showing first 100 rows:")
+        st.dataframe(traj_df.head(100), use_container_width=True)
 
     # Combined navigation using a segmented control with Material icons
     nav_icons = {
