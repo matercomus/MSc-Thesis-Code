@@ -499,3 +499,38 @@ def detect_outliers_pd(
     result = pd.Series(1, index=df_copy.index)
     result.loc[feat.index] = outlier_labels
     return result
+  
+def compute_iqr_thresholds(
+    lazy_df: pl.LazyFrame,
+    iqr_multiplier: float = 1.5
+) -> Tuple[float, float]:
+    """
+    Compute robust thresholds for time_diff_seconds and implied_speed_kph using IQR method.
+    Threshold = Q3 + iqr_multiplier * IQR, computed on occupied segments only.
+    Args:
+        lazy_df: Polars LazyFrame of trajectory data with 'occupancy_status'.
+        iqr_multiplier: Multiplier for the IQR.
+    Returns:
+        (time_diff_threshold, speed_threshold)
+    """
+    # Filter occupied segments
+    df_occ = lazy_df.filter(pl.col("occupancy_status") == 1)
+    # Compute time_diff and implied_speed
+    feats = df_occ.pipe(add_time_distance_calcs).pipe(add_implied_speed)
+    # Compute quartiles
+    q = feats.select([
+        pl.col("time_diff_seconds").quantile(0.25).alias("q1_td"),
+        pl.col("time_diff_seconds").quantile(0.75).alias("q3_td"),
+        pl.col("implied_speed_kph").quantile(0.25).alias("q1_sp"),
+        pl.col("implied_speed_kph").quantile(0.75).alias("q3_sp"),
+    ]).collect()
+    q1_td = q["q1_td"][0]
+    q3_td = q["q3_td"][0]
+    q1_sp = q["q1_sp"][0]
+    q3_sp = q["q3_sp"][0]
+    iqr_td = q3_td - q1_td
+    iqr_sp = q3_sp - q1_sp
+    # Compute thresholds
+    time_diff_threshold = q3_td + iqr_multiplier * iqr_td
+    speed_threshold = q3_sp + iqr_multiplier * iqr_sp
+    return time_diff_threshold, speed_threshold

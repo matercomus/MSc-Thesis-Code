@@ -436,6 +436,33 @@ def test_detect_outliers_pd_basic():
     assert isinstance(out, pd.Series)
     assert len(out) == 3
     assert set(out.unique()).issubset({-1, 1})
+  
+def test_compute_iqr_thresholds_simple():
+    import polars as pl
+    from utils import compute_iqr_thresholds, add_time_distance_calcs, add_implied_speed
+    # Create simple trajectory data with constant spacing
+    df = pl.DataFrame({
+        "license_plate": ["A"] * 5 + ["A"],
+        "timestamp": [
+            "2023-01-01T00:00:00",
+            "2023-01-01T00:01:00",
+            "2023-01-01T00:02:00",
+            "2023-01-01T00:03:00",
+            "2023-01-01T00:04:00",
+            "2023-01-01T00:05:00",
+        ],
+        "latitude": [0.0] * 6,
+        "longitude": [0.0] * 6,
+        "occupancy_status": [1, 1, 1, 1, 1, 0],
+    })
+    df = df.with_columns(pl.col("timestamp").str.strptime(pl.Datetime))
+    # Compute thresholds
+    lazy = df.lazy()
+    time_th, speed_th = compute_iqr_thresholds(lazy)
+    # Since time differences are all 60s for occupied rows, threshold should be 60
+    assert time_th == 60.0
+    # Implied speeds are zero, so threshold should be 0
+    assert speed_th == 0.0
 
 
 def test_period_id_increments_on_license_plate_change():

@@ -8,6 +8,8 @@ dependencies = [
     "pytest>=8.3.5",
     # Required for outlier detection
     "scikit-learn>=1.0.0",
+    # Required for threshold analysis plots
+    "matplotlib>=3.0.0",
 ]
 
 [tool.marimo.experimental]

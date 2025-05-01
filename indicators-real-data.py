@@ -21,6 +21,7 @@ def _():
         add_period_id,
         summarize_periods,
         detect_outliers_pd,
+        compute_iqr_thresholds,
     )
     return (
         add_abnormality_flags,
@@ -36,15 +37,21 @@ def _():
 
 
 @app.cell
-def _(configure_logging, pl):
-    # Configuration
+def _(configure_logging, pl, add_time_distance_calcs, add_implied_speed, compute_iqr_thresholds):
+    """
+    Configuration and dynamic threshold estimation for time gaps and speeds
+    using IQR on occupied trips only.
+    """
+    # Initialize logging
     configure_logging()
-    TEMPORAL_GAP_THRESHOLD = 300  # 5 minutes in seconds
-    SPEED_THRESHOLD = 200.0  # km/h
-
-    # Load data
+    # Compute thresholds based on IQR method (Q3 + 1.5*IQR)
+    time_gap_th, speed_th = compute_iqr_thresholds(
+        pl.scan_parquet("filtered_points_in_beijing.parquet")
+    )
+    # Load full data for pipeline
     lazy_df = pl.scan_parquet("filtered_points_in_beijing.parquet")
-    return SPEED_THRESHOLD, TEMPORAL_GAP_THRESHOLD, lazy_df
+    # Return constants and data
+    return speed_th, time_gap_th, lazy_df
 
 
 @app.cell
@@ -188,20 +195,40 @@ def main():
         detect_outliers_pd,
     )
 
-    # Setup
-    pl.enable_string_cache()
-    configure_logging()
-    TEMPORAL_GAP_THRESHOLD = 300  # seconds
-    SPEED_THRESHOLD = 200.0  # km/h
 
     # Load filtered points
     lazy_df = pl.scan_parquet("filtered_points_in_beijing.parquet")
 
-    # Compute time, distance, speed, and abnormality flags
-    df_base = (
-        lazy_df.sort("license_plate", "timestamp")
+    # Setup
+    pl.enable_string_cache()
+    configure_logging()
+    # Robust threshold estimation: use IQR method on occupied trips only
+    IQR_MULTIPLIER = 1.5
+    # Prepare base features (time, distance, speed) for occupied trips only
+    feats_lazy = (
+        lazy_df
+        .filter(pl.col("occupancy_status") == 1)
+        .sort("license_plate", "timestamp")
         .pipe(add_time_distance_calcs)
         .pipe(add_implied_speed)
+    )
+    # Compute Q1 and Q3 for time differences and speeds
+    q = feats_lazy.select([
+        pl.col("time_diff_seconds").quantile(0.25).alias("q1_td"),
+        pl.col("time_diff_seconds").quantile(0.75).alias("q3_td"),
+        pl.col("implied_speed_kph").quantile(0.25).alias("q1_sp"),
+        pl.col("implied_speed_kph").quantile(0.75).alias("q3_sp"),
+    ]).collect()
+    q1_td, q3_td = q["q1_td"][0], q["q3_td"][0]
+    q1_sp, q3_sp = q["q1_sp"][0], q["q3_sp"][0]
+    iqr_td = q3_td - q1_td
+    iqr_sp = q3_sp - q1_sp
+    # Set thresholds as Q3 + multiplier * IQR
+    TEMPORAL_GAP_THRESHOLD = q3_td + IQR_MULTIPLIER * iqr_td
+    SPEED_THRESHOLD = q3_sp + IQR_MULTIPLIER * iqr_sp
+    # Compute base indicators with abnormality flags using dynamic thresholds
+    df_base = (
+        feats_lazy
         .pipe(add_abnormality_flags, TEMPORAL_GAP_THRESHOLD, SPEED_THRESHOLD)
         .pipe(select_final_columns)
         .collect()
