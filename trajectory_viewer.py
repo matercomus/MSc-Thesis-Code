@@ -84,55 +84,41 @@ def get_sample_license_plates(limit: int = 100) -> list:
 
 
 def main():
-    # Initialize navigation state
-    SAMPLE_LP_LIMIT = 100
-    lp_list = get_sample_license_plates(SAMPLE_LP_LIMIT)
-    n_lp = len(lp_list)
-    if "lp_index" not in st.session_state:
-        st.session_state.lp_index = 0
-    if "period_index" not in st.session_state:
-        st.session_state.period_index = 0
+    # Sidebar: license plate and period selection
+    st.sidebar.title("Trajectory Viewer")
+    lp_list = get_sample_license_plates(500)
+    # License plate selectbox bound to session_state 'lp'
+    st.sidebar.selectbox("Select license plate", lp_list, key="lp")
+    lp = st.session_state.lp
 
-    # Navigation callbacks
-    def prev_plate():
-        st.session_state.lp_index = max(0, st.session_state.lp_index - 1)
-        st.session_state.period_index = 0
+    # Load all periods for selected license plate and display table for selection
+    periods_df = (
+        pl.scan_parquet(PERIOD_FILE)
+        .filter(pl.col("license_plate") == lp)
+        .collect()
+    )
+    if periods_df.is_empty():
+        st.sidebar.error(f"No periods for plate {lp}")
+        return
+    st.subheader(f"Periods for {lp}")
+    st.dataframe(periods_df, use_container_width=True)
+    # Period selectbox bound to session_state 'period_id'
+    period_ids = periods_df.get_column("period_id").to_list()
+    st.sidebar.selectbox("Select period ID", period_ids, key="period_id")
+    period_id = st.session_state.period_id
 
-    def next_plate():
-        st.session_state.lp_index = min(n_lp - 1, st.session_state.lp_index + 1)
-        st.session_state.period_index = 0
-
-    # Current license plate
-    lp = lp_list[st.session_state.lp_index]
-
-    # Fetch period IDs
+    # Display trajectory header with selected period index
+    # Compute position of selected period
+    period_ids = periods_df.get_column("period_id").to_list()
+    n_periods = len(period_ids)
     try:
-        period_ids = get_period_ids(lp)
-    except Exception as e:
-        st.error(f"Error loading periods for plate '{lp}': {e}")
-        return
-    if not period_ids:
-        st.warning(f"No periods found for license plate '{lp}'.")
-        return
-    # Clamp period index
-    n_periods = len(period_ids)
-    if st.session_state.period_index >= n_periods:
-        st.session_state.period_index = n_periods - 1
-    if st.session_state.period_index < 0:
-        st.session_state.period_index = 0
-    period_id = period_ids[st.session_state.period_index]
-    n_periods = len(period_ids)
-    if st.session_state.period_index >= n_periods:
-        st.session_state.period_index = n_periods - 1
-    if st.session_state.period_index < 0:
-        st.session_state.period_index = 0
-    period_id = period_ids[st.session_state.period_index]
-
-    # Display trajectory header
-    st.markdown(f"**Trajectory: {lp} | Period: {period_id} ({st.session_state.period_index+1}/{n_periods})**")
+        sel_idx = period_ids.index(period_id)
+    except ValueError:
+        sel_idx = 0
+    st.markdown(f"**Trajectory: {lp} | Period: {period_id} ({sel_idx+1}/{n_periods})**")
 
     # Toggle map background
-    bg_osm = st.checkbox("Show map background (OSM)", value=True, key="bg_osm")
+    bg_osm = st.sidebar.checkbox("Show map background (OSM)", value=True)
 
     # Compute SLD threshold for flagging abnormal trajectories
     from utils import compute_generic_iqr_threshold
@@ -146,14 +132,9 @@ def main():
         st.error(f"Error loading period information: {e}")
         return
     # Flag abnormal trajectories based on SLD threshold
-    try:
-        sld_ratio = info_df["sld_ratio"][0]
-        if sld_ratio > sld_th:
-            st.markdown(
-                "<h3 style='color:red'>ABNORMAL (SLD)</h3>", unsafe_allow_html=True
-            )
-    except Exception:
-        pass
+    is_sld_outlier = info_df.get_column("is_sld_outlier")[0]
+    if is_sld_outlier:
+        st.markdown("<h3 style='color:red'>ABNORMAL (SLD)</h3>", unsafe_allow_html=True)
     # Flag abnormal trajectories based on Isolation Forest indicator
     try:
         is_if_outlier = info_df["is_traj_outlier"][0]
@@ -163,10 +144,11 @@ def main():
             )
     except Exception:
         pass
+    # Load trajectory for selected period
     try:
         traj_df = get_trajectory(lp, period_id)
     except Exception as e:
-        st.error(f"Error loading trajectory data: {e}")
+        st.error(f"Error loading trajectory data for period {period_id}: {e}")
         return
     if traj_df.is_empty():
         st.warning("No trajectory data available for this period.")
@@ -206,55 +188,46 @@ def main():
 
     # Display map
     st.plotly_chart(fig, use_container_width=True)
-
-    # Combined navigation using a segmented control with Material icons
+    # Navigation controls (prev/next plate and period)
     nav_icons = {
         "prev_plate": ":material/arrow_upward:",
         "prev_period": ":material/arrow_back:",
         "next_period": ":material/arrow_forward:",
         "next_plate": ":material/arrow_downward:",
     }
-
     def handle_nav():
         choice = st.session_state.nav
+        # Plate navigation
+        idx_lp = lp_list.index(lp)
         if choice == "prev_plate":
-            st.session_state.lp_index = max(0, st.session_state.lp_index - 1)
-            st.session_state.period_index = 0
+            new_idx = max(0, idx_lp - 1)
+            st.session_state.lp = lp_list[new_idx]
         elif choice == "next_plate":
-            st.session_state.lp_index = min(n_lp - 1, st.session_state.lp_index + 1)
-            st.session_state.period_index = 0
-        elif choice == "prev_period":
-            st.session_state.period_index = max(0, st.session_state.period_index - 1)
+            new_idx = min(len(lp_list) - 1, idx_lp + 1)
+            st.session_state.lp = lp_list[new_idx]
+        # Period navigation
+        idx_p = period_ids.index(period_id)
+        if choice == "prev_period":
+            new_p = max(0, idx_p - 1)
+            st.session_state.period_id = period_ids[new_p]
         elif choice == "next_period":
-            st.session_state.period_index = min(
-                n_periods - 1, st.session_state.period_index + 1
-            )
-        # Reset the control for next use
+            new_p = min(len(period_ids) - 1, idx_p + 1)
+            st.session_state.period_id = period_ids[new_p]
+        # Reset nav
         st.session_state.nav = None
-
-    # Center the navigation control under the map
-    nav_cols = st.columns([5, 2, 5])
-    with nav_cols[1]:
+    cols_nav = st.columns([5, 2, 5])
+    with cols_nav[1]:
         st.segmented_control(
-            "Navigation",
+            "",
             options=list(nav_icons.keys()),
-            format_func=lambda key: nav_icons[key],
+            format_func=lambda k: nav_icons[k],
             key="nav",
             label_visibility="collapsed",
             on_change=handle_nav,
         )
 
-    # Display period metadata
-    st.subheader("Period Information")
-    try:
-        info_df = get_period_info(lp, period_id)
-    except Exception as e:
-        st.error(f"Error loading period information: {e}")
-        return
-    if info_df.is_empty():
-        st.warning("No period information found.")
-    else:
-        st.dataframe(info_df, use_container_width=True)
+
+    # (Removed redundant period metadata table)
 
 
 if __name__ == "__main__":
