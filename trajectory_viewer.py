@@ -134,9 +134,10 @@ def main():
     # Toggle map background
     bg_osm = st.checkbox("Show map background (OSM)", value=True, key="bg_osm")
 
-    # Straight-line to sum-distance (SLD) ratio range selection
-    sl_min, sl_max = st.slider(
-        "SLD Ratio Range", min_value=-2.0, max_value=2.0, value=(-2.0, 2.0), step=0.01
+    # Compute SLD threshold for flagging abnormal trajectories
+    from utils import compute_generic_iqr_threshold
+    sld_th = compute_generic_iqr_threshold(
+        pl.scan_parquet(PERIOD_FILE), "sld_ratio"
     )
     # Load period info once
     try:
@@ -144,10 +145,10 @@ def main():
     except Exception as e:
         st.error(f"Error loading period information: {e}")
         return
-    # Flag abnormal trajectories based on SLD ratio
+    # Flag abnormal trajectories based on SLD threshold
     try:
         sld_ratio = info_df["sld_ratio"][0]
-        if sld_ratio < sl_min or sld_ratio > sl_max:
+        if sld_ratio > sld_th:
             st.markdown(
                 "<h3 style='color:red'>ABNORMAL (SLD)</h3>", unsafe_allow_html=True
             )

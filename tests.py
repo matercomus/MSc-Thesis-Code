@@ -463,6 +463,15 @@ def test_compute_iqr_thresholds_simple():
     assert time_th == 60.0
     # Implied speeds are zero, so threshold should be 0
     assert speed_th == 0.0
+  
+def test_compute_generic_iqr_threshold_simple():
+    import polars as pl
+    from utils import compute_generic_iqr_threshold
+    # Data with known quartiles: [1,2,3,4,100]
+    df = pl.DataFrame({"x": [1, 2, 3, 4, 100]})
+    # Quartiles: Q1=2, Q3=4; IQR=2; threshold=4+1.5*2=7
+    th = compute_generic_iqr_threshold(df.lazy(), "x", iqr_multiplier=1.5)
+    assert th == 7.0
 
 
 def test_period_id_increments_on_license_plate_change():

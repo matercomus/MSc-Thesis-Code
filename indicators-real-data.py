@@ -193,6 +193,7 @@ def main():
         add_period_id,
         summarize_periods,
         detect_outliers_pd,
+        compute_generic_iqr_threshold,
     )
 
 
@@ -254,6 +255,9 @@ def main():
     # Summarize periods and compute straight-line distance ratios
     # Base period summary
     period_df = cleaned_lazy_df.collect().pipe(add_period_id).pipe(summarize_periods)
+    # Remove small periods (fewer than MIN_PERIOD_POINTS)
+    MIN_PERIOD_POINTS = 3
+    period_df = period_df.filter(pl.col("count_rows") >= MIN_PERIOD_POINTS)
     # Attach period_id (and period time bounds) to cleaned points for outlier stats
     cleaned_with_period_id_lazy = (
         cleaned_lazy_df.join(
@@ -267,7 +271,7 @@ def main():
             (pl.col("timestamp") <= pl.col("end_time"))
         )
     )
-    # Compute per-period outlier counts
+    # Compute per-period outlier counts (IsolationForest)
     outlier_stats = (
         cleaned_with_period_id_lazy
         .group_by(["license_plate", "period_id"])
@@ -283,6 +287,13 @@ def main():
             (pl.col("traj_outlier_count") / pl.col("count_rows")).fill_null(0.0).alias("traj_outlier_ratio"),
             (pl.col("traj_outlier_count") > 0).alias("is_traj_outlier"),
         ])
+    )
+    # Flag SLD-based outliers using IQR threshold, and sink enriched periods
+    from utils import compute_generic_iqr_threshold
+    # Compute SLD threshold: Q3 + 1.5*IQR on sld_ratio
+    sld_th = compute_generic_iqr_threshold(period_df.lazy(), "sld_ratio")
+    period_df = period_df.with_columns(
+        (pl.col("sld_ratio") > sld_th).alias("is_sld_outlier")
     )
     # Sink enriched periods
     period_lazy_df = period_df.lazy()

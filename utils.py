@@ -534,3 +534,21 @@ def compute_iqr_thresholds(
     time_diff_threshold = q3_td + iqr_multiplier * iqr_td
     speed_threshold = q3_sp + iqr_multiplier * iqr_sp
     return time_diff_threshold, speed_threshold
+  
+def compute_generic_iqr_threshold(
+    lazy_df: pl.LazyFrame,
+    col: str,
+    iqr_multiplier: float = 1.5,
+) -> float:
+    """
+    Compute a generic IQR-based threshold for the specified column in lazy_df.
+    Threshold = Q3 + iqr_multiplier * IQR.
+    """
+    q = lazy_df.select([
+        pl.col(col).quantile(0.25).alias("q1"),
+        pl.col(col).quantile(0.75).alias("q3"),
+    ]).collect()
+    q1 = q["q1"][0]
+    q3 = q["q3"][0]
+    iqr = q3 - q1
+    return q3 + iqr_multiplier * iqr
