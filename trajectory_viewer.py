@@ -16,6 +16,7 @@ are in the same directory as this script.
 
 import streamlit as st
 import polars as pl
+pl.enable_string_cache()
 import plotly.express as px
 
 st.set_page_config(page_title="Trajectory Previewer", layout="wide")
@@ -84,9 +85,42 @@ def get_sample_license_plates(limit: int = 100) -> list:
 
 
 def main():
-    # Sidebar: license plate and period selection
+    # Sidebar: license plate selection controls
     st.sidebar.title("Trajectory Viewer")
-    lp_list = get_sample_license_plates(500)
+    # Load all periods and compute counts per license plate
+    # Load all periods lazily
+    periods_all = pl.scan_parquet(PERIOD_FILE)
+    lp_counts = (
+        periods_all
+        .group_by("license_plate")
+        .agg(pl.count("period_id").alias("n_periods"))
+        .collect()
+    )
+    # Filtering: show only plates with more than one period
+    filter_multi = st.sidebar.checkbox(
+        "Only plates with >1 period", value=False
+    )
+    if filter_multi:
+        lp_counts = lp_counts.filter(pl.col("n_periods") > 1)
+    # Sorting options
+    sort_order = st.sidebar.radio(
+        "Sort plates by",
+        options=[
+            "Plate (A-Z)",
+            "Periods ascending",
+            "Periods descending",
+        ],
+        index=0,
+    )
+    if sort_order == "Plate (A-Z)":
+        lp_counts = lp_counts.sort("license_plate")
+    elif sort_order == "Periods ascending":
+        lp_counts = lp_counts.sort("n_periods")
+    else:
+        # Sort by number of periods descending
+        lp_counts = lp_counts.sort("n_periods", descending=True)
+    # License plate list
+    lp_list = lp_counts.get_column("license_plate").to_list()
     # License plate selectbox bound to session_state 'lp'
     st.sidebar.selectbox("Select license plate", lp_list, key="lp")
     lp = st.session_state.lp
