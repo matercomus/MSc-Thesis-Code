@@ -388,13 +388,14 @@ def summarize_periods(df: pl.DataFrame) -> pl.DataFrame:
         (pl.col("end_time") - pl.col("start_time")).alias("duration")
     )
 
-    # Compute straight line distance if latitude/longitude available
+        # Compute straight line distance if latitude/longitude available
     if has_latlon:
         start_lats = grouped["start_latitude"].to_list()
         start_lons = grouped["start_longitude"].to_list()
         end_lats = grouped["end_latitude"].to_list()
         end_lons = grouped["end_longitude"].to_list()
 
+        # Calculate great-circle (straight line) distances per period
         distances = [
             haversine_distance(lat1, lon1, lat2, lon2)
             for lat1, lon1, lat2, lon2 in zip(start_lats, start_lons, end_lats, end_lons)
@@ -408,11 +409,11 @@ def summarize_periods(df: pl.DataFrame) -> pl.DataFrame:
         grouped = grouped.drop(
             ["start_latitude", "start_longitude", "end_latitude", "end_longitude"]
         )
-        # Compute straight-line to sum-distance ratio
+        # Compute sum-to-straight-line distance ratio (higher values indicate longer path vs direct distance)
         grouped = grouped.with_columns(
             (
-                pl.when(pl.col("sum_distance") > 0)
-                .then(pl.col("straight_line_distance_km") / pl.col("sum_distance"))
+                pl.when(pl.col("straight_line_distance_km") > 0)
+                .then(pl.col("sum_distance") / pl.col("straight_line_distance_km"))
                 .otherwise(0.0)
             ).alias("sld_ratio")
         )

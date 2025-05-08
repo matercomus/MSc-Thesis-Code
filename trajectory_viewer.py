@@ -85,46 +85,8 @@ def get_sample_license_plates(limit: int = 100) -> list:
 
 
 def main():
-    # Sidebar: license plate selection controls
+    # Sidebar: application title and global period filters
     st.sidebar.title("Trajectory Viewer")
-    # Load all periods and compute counts per license plate
-    # Load all periods lazily
-    periods_all = pl.scan_parquet(PERIOD_FILE)
-    lp_counts = (
-        periods_all
-        .group_by("license_plate")
-        .agg(pl.count("period_id").alias("n_periods"))
-        .collect()
-    )
-    # Filtering: show only plates with more than one period
-    filter_multi = st.sidebar.checkbox(
-        "Only plates with >1 period", value=False
-    )
-    if filter_multi:
-        lp_counts = lp_counts.filter(pl.col("n_periods") > 1)
-    # Sorting options
-    sort_order = st.sidebar.radio(
-        "Sort plates by",
-        options=[
-            "Plate (A-Z)",
-            "Periods ascending",
-            "Periods descending",
-        ],
-        index=0,
-    )
-    if sort_order == "Plate (A-Z)":
-        lp_counts = lp_counts.sort("license_plate")
-    elif sort_order == "Periods ascending":
-        lp_counts = lp_counts.sort("n_periods")
-    else:
-        # Sort by number of periods descending
-        lp_counts = lp_counts.sort("n_periods", descending=True)
-    # License plate list
-    lp_list = lp_counts.get_column("license_plate").to_list()
-    # License plate selectbox bound to session_state 'lp'
-    st.sidebar.selectbox("Select license plate", lp_list, key="lp")
-    lp = st.session_state.lp
-    # Sidebar: filters for period outlier indicators
     st.sidebar.markdown("---")
     st.sidebar.markdown("#### Period Filters")
     filter_sld = st.sidebar.selectbox(
@@ -134,35 +96,77 @@ def main():
         key="filter_sld"
     )
     filter_if = st.sidebar.selectbox(
-        "IF (isolation forest) status",
+        "IF outlier status",
         ["All", "Only outliers", "Only non-outliers"],
         index=0,
         key="filter_if"
     )
-    # Load all periods for selected license plate
-    periods_all = (
-        pl.scan_parquet(PERIOD_FILE)
-        .filter(pl.col("license_plate") == lp)
-        .collect()
-    )
-    if periods_all.is_empty():
-        st.sidebar.error(f"No periods for plate {lp}")
-        return
-    # Apply filters
-    periods_df = periods_all
+    # Load all periods lazily and apply global filters
+    periods_lf = pl.scan_parquet(PERIOD_FILE)
     if filter_sld != "All":
-        want = (filter_sld == "Only outliers")
-        periods_df = periods_df.filter(pl.col("is_sld_outlier") == want)
+        want_sld = (filter_sld == "Only outliers")
+        periods_lf = periods_lf.filter(pl.col("is_sld_outlier") == want_sld)
     if filter_if != "All":
         want_if = (filter_if == "Only outliers")
-        periods_df = periods_df.filter(pl.col("is_traj_outlier") == want_if)
+        periods_lf = periods_lf.filter(pl.col("is_traj_outlier") == want_if)
+    # Filter by occupancy status (multi-select)
+    occ_df = (
+        periods_lf.select("occupancy_status")
+        .unique()
+        .sort("occupancy_status")
+        .collect()
+    )
+    occ_options = occ_df.get_column("occupancy_status").to_list()
+    filter_occ = st.sidebar.multiselect(
+        "Occupancy status", options=occ_options, default=occ_options, key="filter_occ"
+    )
+    periods_lf = periods_lf.filter(pl.col("occupancy_status").is_in(filter_occ))
+    # Optionally hide very short periods by total distance
+    hide_small = st.sidebar.checkbox(
+        "Hide periods with sum_distance < 1 km", value=False, key="hide_small"
+    )
+    if hide_small:
+        periods_lf = periods_lf.filter(pl.col("sum_distance") >= 1.0)
+    # Compute counts per license plate
+    lp_counts = (
+        periods_lf
+        .group_by("license_plate")
+        .agg(pl.count("period_id").alias("n_periods"))
+        .collect()
+    )
+    # Optional: only plates with multiple filtered periods
+    filter_multi = st.sidebar.checkbox(
+        "Only plates with >1 period", value=False
+    )
+    if filter_multi:
+        lp_counts = lp_counts.filter(pl.col("n_periods") > 1)
+    # Sorting options for license plates
+    sort_order = st.sidebar.radio(
+        "Sort plates by",
+        ["Plate (A-Z)", "Periods ascending", "Periods descending"],
+        index=0,
+    )
+    if sort_order == "Plate (A-Z)":
+        lp_counts = lp_counts.sort("license_plate")
+    elif sort_order == "Periods ascending":
+        lp_counts = lp_counts.sort("n_periods")
+    else:
+        lp_counts = lp_counts.sort("n_periods", descending=True)
+    # License plate selection
+    lp_list = lp_counts.get_column("license_plate").to_list()
+    st.sidebar.selectbox("Select license plate", lp_list, key="lp")
+    lp = st.session_state.lp
+    # Load filtered periods for selected plate
+    periods_df = (
+        periods_lf.filter(pl.col("license_plate") == lp)
+        .collect()
+    )
     if periods_df.is_empty():
-        st.warning("No periods match selected outlier filters for this plate.")
+        st.warning(f"No periods match selected filters for plate {lp}.")
         return
-    # Display filtered periods and select period
+    # Display periods and select period
     st.subheader(f"Periods for {lp}")
     st.dataframe(periods_df, use_container_width=True)
-    # Period selectbox bound to session_state 'period_id'
     period_ids = periods_df.get_column("period_id").to_list()
     st.sidebar.selectbox("Select period ID", period_ids, key="period_id")
     period_id = st.session_state.period_id
