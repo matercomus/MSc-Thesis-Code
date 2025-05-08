@@ -124,16 +124,42 @@ def main():
     # License plate selectbox bound to session_state 'lp'
     st.sidebar.selectbox("Select license plate", lp_list, key="lp")
     lp = st.session_state.lp
-
-    # Load all periods for selected license plate and display table for selection
-    periods_df = (
+    # Sidebar: filters for period outlier indicators
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("#### Period Filters")
+    filter_sld = st.sidebar.selectbox(
+        "SLD outlier status",
+        ["All", "Only outliers", "Only non-outliers"],
+        index=0,
+        key="filter_sld"
+    )
+    filter_if = st.sidebar.selectbox(
+        "IF (isolation forest) status",
+        ["All", "Only outliers", "Only non-outliers"],
+        index=0,
+        key="filter_if"
+    )
+    # Load all periods for selected license plate
+    periods_all = (
         pl.scan_parquet(PERIOD_FILE)
         .filter(pl.col("license_plate") == lp)
         .collect()
     )
-    if periods_df.is_empty():
+    if periods_all.is_empty():
         st.sidebar.error(f"No periods for plate {lp}")
         return
+    # Apply filters
+    periods_df = periods_all
+    if filter_sld != "All":
+        want = (filter_sld == "Only outliers")
+        periods_df = periods_df.filter(pl.col("is_sld_outlier") == want)
+    if filter_if != "All":
+        want_if = (filter_if == "Only outliers")
+        periods_df = periods_df.filter(pl.col("is_traj_outlier") == want_if)
+    if periods_df.is_empty():
+        st.warning("No periods match selected outlier filters for this plate.")
+        return
+    # Display filtered periods and select period
     st.subheader(f"Periods for {lp}")
     st.dataframe(periods_df, use_container_width=True)
     # Period selectbox bound to session_state 'period_id'
