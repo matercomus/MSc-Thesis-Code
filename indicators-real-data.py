@@ -227,9 +227,12 @@ def main():
     # Set thresholds as Q3 + multiplier * IQR
     TEMPORAL_GAP_THRESHOLD = q3_td + IQR_MULTIPLIER * iqr_td
     SPEED_THRESHOLD = q3_sp + IQR_MULTIPLIER * iqr_sp
-    # Compute base indicators with abnormality flags using dynamic thresholds
+    # Compute base indicators with abnormality flags using dynamic thresholds on full data
     df_base = (
-        feats_lazy
+        lazy_df
+        .sort("license_plate", "timestamp")
+        .pipe(add_time_distance_calcs)
+        .pipe(add_implied_speed)
         .pipe(add_abnormality_flags, TEMPORAL_GAP_THRESHOLD, SPEED_THRESHOLD)
         .pipe(select_final_columns)
         .collect()
