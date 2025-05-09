@@ -11,3 +11,4 @@ wheels/
 __marimo__/session
 2019.11.2*
 .env
+threshold_analysis_*
