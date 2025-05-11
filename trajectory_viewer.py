@@ -18,6 +18,7 @@ import streamlit as st
 import polars as pl
 pl.enable_string_cache()
 import plotly.express as px
+import hashlib
 
 st.set_page_config(page_title="Trajectory Previewer", layout="wide")
 
@@ -26,6 +27,9 @@ st.set_page_config(page_title="Trajectory Previewer", layout="wide")
 PERIOD_FILE = "periods_with_sld_ratio.parquet"
 DATA_FILE = "cleaned_with_period_id_in_beijing.parquet"
 
+def anonymize_text(text: str) -> str:
+    """Anonymize text by creating a deterministic hash."""
+    return hashlib.sha256(str(text).encode()).hexdigest()[:8]
 
 @st.cache_data
 def get_period_ids(lp: str) -> list:
@@ -87,6 +91,11 @@ def get_sample_license_plates(limit: int = 100) -> list:
 def main():
     # Sidebar: application title and global period filters
     st.sidebar.title("Trajectory Viewer")
+    
+    # Add privacy mode toggle at the top of sidebar
+    privacy_mode = st.sidebar.toggle("Privacy Mode", value=False, 
+                                   help="Hide sensitive information like license plates and timestamps")
+    
     st.sidebar.markdown("---")
     st.sidebar.markdown("#### Period Filters")
     filter_sld = st.sidebar.selectbox(
@@ -154,32 +163,71 @@ def main():
         lp_counts = lp_counts.sort("n_periods", descending=True)
     # License plate selection
     lp_list = lp_counts.get_column("license_plate").to_list()
-    st.sidebar.selectbox("Select license plate", lp_list, key="lp")
-    lp = st.session_state.lp
+    display_lp_list = [anonymize_text(lp) if privacy_mode else lp for lp in lp_list]
+    
+    # Handle state transition when privacy mode changes
+    if "lp" in st.session_state:
+        current_lp = st.session_state.lp
+        if privacy_mode:
+            # If we're in privacy mode, find the original plate and get its hash
+            if current_lp in lp_list:
+                st.session_state.lp = anonymize_text(current_lp)
+            elif current_lp not in display_lp_list:
+                # If the current value isn't in either list, reset to first plate
+                st.session_state.lp = display_lp_list[0]
+        else:
+            # If we're in normal mode, find the original plate
+            if current_lp in display_lp_list:
+                idx = display_lp_list.index(current_lp)
+                st.session_state.lp = lp_list[idx]
+            elif current_lp not in lp_list:
+                # If the current value isn't in either list, reset to first plate
+                st.session_state.lp = lp_list[0]
+    
+    st.sidebar.selectbox("Select license plate", display_lp_list, key="lp")
+    # Get the original license plate from the display value
+    lp = lp_list[display_lp_list.index(st.session_state.lp)]
     # Load filtered periods for selected plate
     periods_df = (
         periods_lf.filter(pl.col("license_plate") == lp)
         .collect()
     )
     if periods_df.is_empty():
-        st.warning(f"No periods match selected filters for plate {lp}.")
+        st.warning(f"No periods match selected filters for plate {lp if not privacy_mode else 'selected'}.")
         return
+        
     # Display periods and select period
-    st.subheader(f"Periods for {lp}")
-    st.dataframe(periods_df, use_container_width=True)
+    if privacy_mode:
+        st.subheader("Periods")
+        # Create a copy of the dataframe for display
+        display_df = periods_df.clone()
+        # Anonymize sensitive columns
+        display_df = display_df.with_columns([
+            pl.col("license_plate").map_elements(anonymize_text),
+            pl.col("start_time").map_elements(lambda x: "***" if x is not None else None),
+            pl.col("end_time").map_elements(lambda x: "***" if x is not None else None)
+        ])
+        st.dataframe(display_df, use_container_width=True)
+    else:
+        st.subheader(f"Periods for {lp}")
+        st.dataframe(periods_df, use_container_width=True)
+        
     period_ids = periods_df.get_column("period_id").to_list()
     st.sidebar.selectbox("Select period ID", period_ids, key="period_id")
     period_id = st.session_state.period_id
 
     # Display trajectory header with selected period index
-    # Compute position of selected period
     period_ids = periods_df.get_column("period_id").to_list()
     n_periods = len(period_ids)
     try:
         sel_idx = period_ids.index(period_id)
     except ValueError:
         sel_idx = 0
-    st.markdown(f"**Trajectory: {lp} | Period: {period_id} ({sel_idx+1}/{n_periods})**")
+    
+    if privacy_mode:
+        st.markdown(f"**Trajectory: *** | Period: {period_id} ({sel_idx+1}/{n_periods})**")
+    else:
+        st.markdown(f"**Trajectory: {lp} | Period: {period_id} ({sel_idx+1}/{n_periods})**")
 
     # Toggle map background
     bg_osm = st.sidebar.checkbox("Show map background (OSM)", value=True)
