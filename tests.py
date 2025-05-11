@@ -13,6 +13,11 @@ from utils import (
     add_period_id,
     summarize_periods,
 )
+from trajectory_utils import (
+    anonymize_text,
+    create_trajectory_plot,
+    handle_license_plate_state,
+)
 
 
 def test_filter_chinese_license_plates():
@@ -495,3 +500,70 @@ def test_period_id_increments_on_license_plate_change():
     df_with_period = add_period_id(df)
     expected_period_ids = [1, 1, 2, 2, 3]
     assert df_with_period["period_id"].to_list() == expected_period_ids
+
+
+def test_anonymize_text_deterministic():
+    assert anonymize_text("test") == anonymize_text("test")
+    assert anonymize_text("test") != anonymize_text("other")
+    assert len(anonymize_text("test")) == 8
+
+
+def test_handle_license_plate_state_privacy():
+    lp_list = ["A", "B", "C"]
+    display_lp_list = [anonymize_text(lp) for lp in lp_list]
+    # Privacy mode ON, current_lp is in lp_list
+    assert handle_license_plate_state(True, lp_list, display_lp_list, "A") == anonymize_text("A")
+    # Privacy mode ON, current_lp not in display_lp_list
+    assert handle_license_plate_state(True, lp_list, display_lp_list, "Z") == display_lp_list[0]
+    # Privacy mode OFF, current_lp is in display_lp_list
+    assert handle_license_plate_state(False, lp_list, display_lp_list, display_lp_list[1]) == "B"
+    # Privacy mode OFF, current_lp not in lp_list
+    assert handle_license_plate_state(False, lp_list, display_lp_list, "Z") == "A"
+
+
+def test_create_trajectory_plot_mapbox():
+    df = pl.DataFrame({
+        "longitude": [116.1, 116.2, 116.3],
+        "latitude": [39.9, 39.91, 39.92],
+    })
+    fig = create_trajectory_plot(df, bg_osm=True)
+    assert fig is not None
+    assert hasattr(fig, "to_dict")
+
+
+def test_create_trajectory_plot_no_mapbox():
+    df = pl.DataFrame({
+        "longitude": [116.1, 116.2, 116.3],
+        "latitude": [39.9, 39.91, 39.92],
+    })
+    fig = create_trajectory_plot(df, bg_osm=False)
+    assert fig is not None
+    assert hasattr(fig, "to_dict")
+
+
+# The following tests require actual parquet files and are skipped if not present
+import os
+import pytest
+from trajectory_utils import get_period_ids, get_period_info, get_trajectory, get_filtered_periods
+
+@pytest.mark.skipif(not os.path.exists("periods_with_sld_ratio.parquet"), reason="Parquet file not found")
+def test_get_period_ids():
+    # Just test that it runs and returns a list
+    ids = get_period_ids("some_plate")
+    assert isinstance(ids, list)
+
+@pytest.mark.skipif(not os.path.exists("periods_with_sld_ratio.parquet"), reason="Parquet file not found")
+def test_get_period_info():
+    # Just test that it runs and returns a DataFrame
+    df = get_period_info("some_plate", 1)
+    assert isinstance(df, pl.DataFrame)
+
+@pytest.mark.skipif(not os.path.exists("cleaned_with_period_id_in_beijing.parquet"), reason="Parquet file not found")
+def test_get_trajectory():
+    df = get_trajectory("some_plate", 1)
+    assert isinstance(df, pl.DataFrame)
+
+@pytest.mark.skipif(not os.path.exists("periods_with_sld_ratio.parquet"), reason="Parquet file not found")
+def test_get_filtered_periods():
+    lf = get_filtered_periods("All", "All", ["empty"], False)
+    assert hasattr(lf, "collect")
