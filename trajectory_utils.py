@@ -1,77 +1,138 @@
 """
-Utility functions for loading and plotting trajectories based on period IDs.
+Utility functions for the trajectory viewer application.
 """
+
+import streamlit as st
 import polars as pl
-from utils import add_period_id
+import hashlib
 import plotly.express as px
-import matplotlib.pyplot as plt
+from plotly.graph_objects import Figure
 
-def load_points_with_periods(parquet_path: str = "cleaned_points_in_beijing.parquet") -> pl.DataFrame:
-    """
-    Load cleaned points and assign period IDs per license_plate and occupancy_status.
-    Returns a Polars DataFrame with a new 'period_id' column.
-    """
-    df = pl.scan_parquet(parquet_path).collect()
-    return add_period_id(df)
+# Constants
+PERIOD_FILE = "periods_with_sld_ratio.parquet"
+DATA_FILE = "cleaned_with_period_id_in_beijing.parquet"
 
-def plotly_trajectory(
-    df: pl.DataFrame, license_plate: str, period_id: int
-) -> "plotly.graph_objs._figure.Figure":
-    """
-    Plot the trajectory for a given license_plate and period_id using Plotly.
-    Shows a red line on a white background connecting (longitude, latitude) points.
-    """
-    subset = (
-        df.filter(
-            (pl.col("license_plate") == license_plate)
-            & (pl.col("period_id") == period_id)
-        )
+def anonymize_text(text: str) -> str:
+    """Anonymize text by creating a deterministic hash."""
+    return hashlib.sha256(str(text).encode()).hexdigest()[:8]
+
+@st.cache_data
+def get_period_ids(lp: str) -> list:
+    """Return a sorted list of period_ids for the given license plate."""
+    df = (
+        pl.scan_parquet(PERIOD_FILE)
+        .filter(pl.col("license_plate") == lp)
+        .select("period_id")
+        .unique()
+        .sort("period_id")
+        .collect()
+    )
+    return df["period_id"].to_list()
+
+@st.cache_data
+def get_period_info(lp: str, period_id) -> pl.DataFrame:
+    """Return the metadata row for a given license plate and period_id."""
+    return (
+        pl.scan_parquet(PERIOD_FILE)
+        .filter((pl.col("license_plate") == lp) & (pl.col("period_id") == period_id))
+        .collect()
+    )
+
+@st.cache_data
+def get_trajectory(lp: str, period_id) -> pl.DataFrame:
+    """Return the trajectory DataFrame (latitude, longitude, timestamp) for the given license plate and period."""
+    df = (
+        pl.scan_parquet(DATA_FILE)
+        .filter((pl.col("license_plate") == lp) & (pl.col("period_id") == period_id))
+        .select([
+            "timestamp",
+            "latitude",
+            "longitude",
+            pl.col("is_outlier").fill_null(1).alias("is_outlier"),
+        ])
         .sort("timestamp")
+        .collect()
     )
-    if subset.is_empty():
-        raise ValueError(f"No data for plate {license_plate}, period {period_id}")
-    pd_df = subset.select(["longitude", "latitude"]).to_pandas()
-    fig = px.line(
-        pd_df,
-        x="longitude",
-        y="latitude",
-        title=f"Trajectory: {license_plate} Period {period_id}",
-        line_shape="linear",
+    return df
+
+@st.cache_data
+def get_sample_license_plates(limit: int = 100) -> list:
+    """Return a sorted list of up to `limit` unique license plates."""
+    df = (
+        pl.scan_parquet(PERIOD_FILE)
+        .select("license_plate")
+        .unique()
+        .sort("license_plate")
+        .limit(limit)
+        .collect()
     )
-    fig.update_traces(line=dict(color="red"))
-    fig.update_layout(
-        plot_bgcolor="white",
-        xaxis_title="Longitude",
-        yaxis_title="Latitude",
-    )
+    return df["license_plate"].to_list()
+
+def create_trajectory_plot(traj_df: pl.DataFrame, bg_osm: bool = True) -> Figure:
+    """Create a plotly figure for the trajectory."""
+    lon_list = traj_df["longitude"].to_list()
+    lat_list = traj_df["latitude"].to_list()
+
+    if bg_osm:
+        center_lat = sum(lat_list) / len(lat_list)
+        center_lon = sum(lon_list) / len(lon_list)
+        fig = px.line_mapbox(
+            lat=lat_list,
+            lon=lon_list,
+        )
+        fig.update_traces(line_color="red")
+        fig.update_layout(
+            mapbox_style="open-street-map",
+            mapbox_center={"lat": center_lat, "lon": center_lon},
+            mapbox_zoom=12,
+            margin={"l": 0, "r": 0, "t": 0, "b": 0},
+        )
+    else:
+        fig = px.line(x=lon_list, y=lat_list)
+        fig.update_traces(line_color="red")
+        fig.update_layout(
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            xaxis_title="Longitude",
+            yaxis_title="Latitude",
+            margin=dict(l=0, r=0, t=0, b=0),
+        )
+        fig.update_xaxes(showgrid=False)
+        fig.update_yaxes(showgrid=False)
+    
     return fig
 
-def matplotlib_trajectory(
-    df: pl.DataFrame, license_plate: str, period_id: int
-) -> "tuple[plt.Figure, plt.Axes]":
-    """
-    Plot the trajectory for a given license_plate and period_id using Matplotlib.
-    Shows a red line on a white background connecting (longitude, latitude) points.
-    """
-    subset = (
-        df.filter(
-            (pl.col("license_plate") == license_plate)
-            & (pl.col("period_id") == period_id)
-        )
-        .sort("timestamp")
-    )
-    if subset.is_empty():
-        raise ValueError(f"No data for plate {license_plate}, period {period_id}")
-    lons = subset["longitude"].to_list()
-    lats = subset["latitude"].to_list()
-    fig, ax = plt.subplots()
-    ax.plot(lons, lats, color="red")
-    ax.set_facecolor("white")
-    ax.set_title(f"Trajectory: {license_plate} Period {period_id}")
-    ax.set_xlabel("Longitude")
-    ax.set_ylabel("Latitude")
-    ax.set_xlim(min(lons), max(lons))
-    ax.set_ylim(min(lats), max(lats))
-    ax.set_aspect("equal", adjustable="box")
-    plt.tight_layout()
-    return fig, ax
+def get_filtered_periods(filter_sld: str, filter_if: str, filter_occ: list, hide_small: bool) -> pl.LazyFrame:
+    """Get filtered periods based on the provided filters."""
+    periods_lf = pl.scan_parquet(PERIOD_FILE)
+    
+    if filter_sld != "All":
+        want_sld = (filter_sld == "Only outliers")
+        periods_lf = periods_lf.filter(pl.col("is_sld_outlier") == want_sld)
+    
+    if filter_if != "All":
+        want_if = (filter_if == "Only outliers")
+        periods_lf = periods_lf.filter(pl.col("is_traj_outlier") == want_if)
+    
+    periods_lf = periods_lf.filter(pl.col("occupancy_status").is_in(filter_occ))
+    
+    if hide_small:
+        periods_lf = periods_lf.filter(pl.col("sum_distance") >= 1.0)
+    
+    return periods_lf
+
+def handle_license_plate_state(privacy_mode: bool, lp_list: list, display_lp_list: list, current_lp: str) -> str:
+    """Handle license plate state transitions when privacy mode changes."""
+    if privacy_mode:
+        if current_lp in lp_list:
+            return anonymize_text(current_lp)
+        elif current_lp not in display_lp_list:
+            return display_lp_list[0]
+    else:
+        if current_lp in display_lp_list:
+            idx = display_lp_list.index(current_lp)
+            return lp_list[idx]
+        elif current_lp not in lp_list:
+            return lp_list[0]
+    
+    return current_lp
