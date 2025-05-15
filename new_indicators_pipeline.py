@@ -26,6 +26,13 @@ from utils import (
     compute_iqr_thresholds,
     compute_generic_iqr_threshold,
 )
+import osmnx as ox
+import networkx as nx
+from pipeline_utils import file_hash, write_meta, is_up_to_date
+from pathlib import Path
+import hashlib
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def save_parquet(df: pl.DataFrame, path: str, label: str = None):
     df.write_parquet(path)
@@ -43,6 +50,115 @@ def attach_period_id(cleaned_df: pl.DataFrame, period_df: pl.DataFrame) -> pl.Da
         (pl.col("timestamp") >= pl.col("start_time")) & (pl.col("timestamp") <= pl.col("end_time"))
     )
     return joined
+
+def ensure_osm_graph(osm_graph_path, place_name="Beijing, China"):
+    meta_path = str(osm_graph_path) + '.meta.json'
+    if Path(osm_graph_path).exists() and Path(meta_path).exists():
+        print("OSM graph already exists and is up-to-date.")
+        return
+    print("Downloading OSM graph...")
+    G = ox.graph_from_place(place_name, network_type="drive")
+    ox.save_graphml(G, osm_graph_path)
+    write_meta(meta_path, {
+        "graphml_hash": file_hash(osm_graph_path),
+        "place_name_hash": hashlib.sha256(place_name.encode()).hexdigest()
+    })
+
+def compute_network_shortest_paths_batched(
+    periods_path,
+    osm_graph_path,
+    output_path,
+    batch_size=500,
+    num_workers=8,
+    checkpoint_dir="network_checkpoints"
+):
+    # Setup logging
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logger = logging.getLogger("network_shortest_path")
+    os.makedirs(checkpoint_dir, exist_ok=True)
+
+    # Load periods
+    periods_df = pd.read_parquet(periods_path)
+    G = ox.load_graphml(osm_graph_path)
+
+    # Unique key for checkpointing
+    periods_df['unique_key'] = periods_df['license_plate'].astype(str) + '_' + periods_df['period_id'].astype(str)
+
+    # Check for existing checkpoint
+    checkpoint_file = os.path.join(checkpoint_dir, "network_paths_checkpoint.parquet")
+    if os.path.exists(checkpoint_file):
+        done_df = pd.read_parquet(checkpoint_file)
+        done_keys = set(done_df['unique_key'])
+        logger.info(f"Loaded checkpoint with {len(done_keys)} completed periods.")
+    else:
+        done_df = pd.DataFrame()
+        done_keys = set()
+
+    # Filter out already processed periods
+    to_process = periods_df[~periods_df['unique_key'].isin(done_keys)].copy()
+    logger.info(f"Processing {len(to_process)} new periods (skipping {len(done_keys)} already done).")
+
+    def get_dist(row):
+        try:
+            orig = ox.nearest_nodes(G, row['start_longitude'], row['start_latitude'])
+            dest = ox.nearest_nodes(G, row['end_longitude'], row['end_latitude'])
+            return nx.shortest_path_length(G, orig, dest, weight='length') / 1000
+        except Exception as e:
+            logger.warning(f"Failed for period {row['unique_key']}: {e}")
+            return float('nan')
+
+    # Process in batches
+    all_results = []
+    for i in tqdm(range(0, len(to_process), batch_size), desc="Batches"):
+        batch = to_process.iloc[i:i+batch_size]
+        results = []
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            future_to_idx = {executor.submit(get_dist, row): idx for idx, row in batch.iterrows()}
+            for future in tqdm(as_completed(future_to_idx), total=len(batch), desc=f"Batch {i//batch_size+1}"):
+                idx = future_to_idx[future]
+                try:
+                    dist = future.result()
+                except Exception as e:
+                    dist = float('nan')
+                results.append((idx, dist))
+        # Assign results
+        for idx, dist in results:
+            batch.at[idx, 'network_shortest_distance'] = dist
+        all_results.append(batch)
+        # Save checkpoint
+        if os.path.exists(checkpoint_file):
+            prev = pd.read_parquet(checkpoint_file)
+            pd.concat([prev, batch]).drop_duplicates('unique_key').to_parquet(checkpoint_file)
+        else:
+            batch.to_parquet(checkpoint_file)
+        logger.info(f"Checkpointed batch {i//batch_size+1} ({len(batch)} periods).")
+
+    # Combine with previous results
+    if not done_df.empty:
+        all_results.append(done_df)
+    final_df = pd.concat(all_results, ignore_index=True)
+    final_df['route_deviation_ratio'] = final_df['sum_distance'] / final_df['network_shortest_distance']
+    final_df.to_parquet(output_path)
+    logger.info(f"Saved final results to {output_path}")
+
+    return final_df
+
+def compute_network_outlier_flag(input_path, output_path, iqr_multiplier=1.5):
+    input_paths = {"network_ratio_hash": input_path}
+    if is_up_to_date(output_path, input_paths):
+        print(f"{output_path} is up-to-date. Skipping computation.")
+        return pd.read_parquet(output_path)
+    df = pd.read_parquet(input_path)
+    q1 = df['route_deviation_ratio'].quantile(0.25)
+    q3 = df['route_deviation_ratio'].quantile(0.75)
+    iqr = q3 - q1
+    threshold = q3 + iqr_multiplier * iqr
+    df['is_network_outlier'] = df['route_deviation_ratio'] > threshold
+    df.to_parquet(output_path)
+    write_meta(str(output_path) + '.meta.json', {
+        "network_ratio_hash": file_hash(input_path)
+    })
+    return df
 
 def main():
     configure_logging()
@@ -125,6 +241,26 @@ def main():
         (pl.col("sld_ratio") > sld_th).alias("is_sld_outlier")
     )
     save_parquet(period_df, "data/periods_with_sld_ratio.parquet", label="Period summary with SLD ratio and outlier flags")
+
+    # After period_df is created and saved as data/periods_with_sld_ratio.parquet
+    # 1. Ensure OSM graph
+    ensure_osm_graph("beijing_drive.graphml", place_name="Beijing, China")
+    # 2. Compute network shortest paths and ratios (batched, threaded, checkpointed)
+    network_ratio_path = "data/periods_with_network_ratio.parquet"
+    compute_network_shortest_paths_batched(
+        periods_path="data/periods_with_sld_ratio.parquet",
+        osm_graph_path="beijing_drive.graphml",
+        output_path=network_ratio_path,
+        batch_size=500,
+        num_workers=8,
+        checkpoint_dir="network_checkpoints"
+    )
+    # 3. Compute threshold and flag outliers
+    final_periods_path = "data/periods_with_network_ratio_flagged.parquet"
+    compute_network_outlier_flag(
+        input_path=network_ratio_path,
+        output_path=final_periods_path
+    )
 
     logging.info("Pipeline completed: all parquet files written.")
 

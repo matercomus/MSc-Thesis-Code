@@ -18,6 +18,9 @@ from trajectory_utils import (
     create_trajectory_plot,
     handle_license_plate_state,
 )
+import tempfile
+import shutil
+from pipeline_utils import file_hash, write_meta, read_meta, is_up_to_date
 
 
 def test_filter_chinese_license_plates():
@@ -567,3 +570,98 @@ def test_get_trajectory():
 def test_get_filtered_periods():
     lf = get_filtered_periods("All", "All", ["empty"], False)
     assert hasattr(lf, "collect")
+
+def test_file_hash_and_meta(tmp_path):
+    # Create a temp file
+    file1 = tmp_path / "file1.txt"
+    file1.write_text("hello world")
+    h1 = file_hash(file1)
+    # Change content, hash should change
+    file1.write_text("hello world!")
+    h2 = file_hash(file1)
+    assert h1 != h2
+    # Write and read meta
+    meta_path = tmp_path / "meta.json"
+    meta = {"a": 1, "b": h2}
+    write_meta(meta_path, meta)
+    loaded = read_meta(meta_path)
+    assert loaded == meta
+
+def test_is_up_to_date(tmp_path):
+    # Create two files
+    file1 = tmp_path / "f1.txt"
+    file2 = tmp_path / "f2.txt"
+    file1.write_text("abc")
+    file2.write_text("def")
+    out = tmp_path / "out.txt"
+    out.write_text("output")
+    meta_path = str(out) + ".meta.json"
+    meta = {"f1": file_hash(file1), "f2": file_hash(file2)}
+    write_meta(meta_path, meta)
+    # Should be up to date
+    assert is_up_to_date(out, {"f1": file1, "f2": file2})
+    # Change file1, should not be up to date
+    file1.write_text("changed")
+    assert not is_up_to_date(out, {"f1": file1, "f2": file2})
+
+def test_compute_network_shortest_paths_batched(tmp_path):
+    import networkx as nx
+    import pandas as pd
+    from new_indicators_pipeline import compute_network_shortest_paths_batched
+
+    # Create a tiny synthetic graph (triangle) with string node IDs and string attributes
+    G = nx.DiGraph()
+    G.add_node("1", x="0.0", y="0.0")
+    G.add_node("2", x="1.0", y="0.0")
+    G.add_node("3", x="0.0", y="1.0")
+    G.add_edge("1", "2", length="1.0")
+    G.add_edge("2", "3", length="1.0")
+    G.add_edge("1", "3", length="2.0")
+    G.graph['crs'] = 'EPSG:4326'  # Add CRS attribute for OSMnx compatibility
+    graphml_path = tmp_path / "test.graphml"
+    nx.write_graphml(G, graphml_path)
+
+    # Create a small periods DataFrame
+    df = pd.DataFrame({
+        'license_plate': ['A'],
+        'period_id': [1],
+        'start_longitude': [0.0],
+        'start_latitude': [0.0],
+        'end_longitude': [1.0],
+        'end_latitude': [0.0],
+        'sum_distance': [1.5],
+    })
+    periods_path = tmp_path / "periods.parquet"
+    df.to_parquet(periods_path)
+    out_path = tmp_path / "out.parquet"
+
+    # Run the function
+    result = compute_network_shortest_paths_batched(
+        periods_path=periods_path,
+        osm_graph_path=graphml_path,
+        output_path=out_path,
+        batch_size=1,
+        num_workers=1,
+        checkpoint_dir=tmp_path / "checkpoints"
+    )
+    # Check output columns
+    assert 'network_shortest_distance' in result.columns
+    assert 'route_deviation_ratio' in result.columns
+    # Check that the computed shortest distance is correct (should be close to 1.0 or 0.001)
+    val = result['network_shortest_distance'].iloc[0]
+    assert (abs(val - 1.0) < 0.01) or (abs(val - 0.001) < 0.0001)
+    # Check checkpoint file exists
+    checkpoint_file = tmp_path / "checkpoints" / "network_paths_checkpoint.parquet"
+    assert checkpoint_file.exists()
+    # Check that rerunning skips computation (simulate by deleting output)
+    out_path.unlink()
+    result2 = compute_network_shortest_paths_batched(
+        periods_path=periods_path,
+        osm_graph_path=graphml_path,
+        output_path=out_path,
+        batch_size=1,
+        num_workers=1,
+        checkpoint_dir=tmp_path / "checkpoints"
+    )
+    assert out_path.exists()
+    assert result2.equals(result)
