@@ -132,15 +132,6 @@ def main():
     # Get filtered periods
     periods_lf = get_filtered_periods(filter_sld, filter_if, filter_network, filter_occ, hide_small)
     
-    # Apply network outlier filter if the column exists
-    if filter_network != "All":
-        want_network = (filter_network == "Only outliers")
-        # Try to filter if the column exists
-        try:
-            periods_lf = periods_lf.filter(pl.col("is_network_outlier") == want_network)
-        except Exception:
-            pass
-    
     # Compute counts per license plate
     lp_counts = (
         periods_lf
@@ -149,10 +140,18 @@ def main():
         .collect()
     )
     
+    # Check if any plates match the filters
+    if lp_counts.is_empty():
+        st.warning("No trajectories match the current filters. Try adjusting the filters.")
+        return
+    
     # Optional: only plates with multiple filtered periods
     filter_multi = st.sidebar.checkbox("Only plates with >1 period", value=False)
     if filter_multi:
         lp_counts = lp_counts.filter(pl.col("n_periods") > 1)
+        if lp_counts.is_empty():
+            st.warning("No plates have multiple periods with the current filters. Try adjusting the filters or uncheck 'Only plates with >1 period'.")
+            return
     
     # Sorting options for license plates
     sort_order = st.sidebar.radio(
@@ -172,19 +171,37 @@ def main():
     lp_list = lp_counts.get_column("license_plate").to_list()
     display_lp_list = [anonymize_text(lp) if privacy_mode else lp for lp in lp_list]
     
-    # Handle state transition when privacy mode changes
+    # Handle state transition when privacy mode changes or filters change
     if "lp" in st.session_state:
         current_lp = st.session_state.lp
-        new_lp = handle_license_plate_state(privacy_mode, lp_list, display_lp_list, current_lp)
-        if new_lp is None:
-            st.warning("No license plates available for the current filters.")
-            return
-        if new_lp != current_lp:
-            st.session_state.lp = new_lp
+        # Check if current_lp is still valid with current filters
+        if current_lp not in display_lp_list and current_lp not in lp_list:
+            # Reset to first available plate
+            st.session_state.lp = display_lp_list[0] if display_lp_list else None
+            if "period_id" in st.session_state:
+                del st.session_state.period_id
+        else:
+            # Handle privacy mode transition
+            new_lp = handle_license_plate_state(privacy_mode, lp_list, display_lp_list, current_lp)
+            if new_lp != current_lp:
+                st.session_state.lp = new_lp
+    else:
+        # Initialize with first plate
+        st.session_state.lp = display_lp_list[0] if display_lp_list else None
     
+    if not st.session_state.lp:
+        st.warning("No license plates available for the current filters.")
+        return
+    
+    # Display license plate selector
     st.sidebar.selectbox("Select license plate", display_lp_list, key="lp")
+    
     # Get the original license plate from the display value
-    lp = lp_list[display_lp_list.index(st.session_state.lp)]
+    try:
+        lp = lp_list[display_lp_list.index(st.session_state.lp)]
+    except (ValueError, IndexError):
+        st.error("Selected license plate no longer available with current filters.")
+        return
     
     # Load filtered periods for selected plate
     periods_df = (
@@ -210,16 +227,20 @@ def main():
         st.subheader(f"Periods for {lp}")
         st.dataframe(periods_df, use_container_width=True)
     
+    # Get period IDs and handle period selection
     period_ids = periods_df.get_column("period_id").to_list()
+    
+    # Initialize or validate period_id
+    if "period_id" not in st.session_state or st.session_state.period_id not in period_ids:
+        st.session_state.period_id = period_ids[0]
+    
+    # Display period selector
     st.sidebar.selectbox("Select period ID", period_ids, key="period_id")
     period_id = st.session_state.period_id
     
     # Display trajectory header
     n_periods = len(period_ids)
-    try:
-        sel_idx = period_ids.index(period_id)
-    except ValueError:
-        sel_idx = 0
+    sel_idx = period_ids.index(period_id)
     
     if privacy_mode:
         st.markdown(f"**Trajectory: *** | Period: {period_id} ({sel_idx+1}/{n_periods})**")

@@ -14,6 +14,7 @@ import logging
 from tqdm import tqdm
 import polars as pl
 import pandas as pd
+import numpy as np
 from utils import (
     configure_logging,
     add_time_distance_calcs,
@@ -33,10 +34,20 @@ from pathlib import Path
 import hashlib
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import numpy as np
 import argparse
 import glob
 import shutil
+import json
+from datetime import datetime
+
+# Set OSMnx settings for debugging and reproducibility
+ox.settings.log_console = True
+ox.settings.use_cache = True
+ox.settings.timeout = 180
+ox.settings.overpass_rate_limit = True
+ox.settings.default_retries = 3
+ox.settings.default_response_json = True
+# ox.settings.default_access = 'all'  # Removed: causes Overpass query errors
 
 def save_parquet(df: pl.DataFrame, path: str, label: str = None):
     df.write_parquet(path)
@@ -55,7 +66,12 @@ def attach_period_id(cleaned_df: pl.DataFrame, period_df: pl.DataFrame) -> pl.Da
     )
     return joined
 
-def ensure_osm_graph(osm_graph_path, periods_path, buffer=0.01):
+def ensure_osm_graph(osm_graph_path, periods_path, buffer=None):
+    """
+    Ensure the OSMnx graph is downloaded and covers the data bounding box.
+    Buffer can be set via argument or OSM_GRAPH_BUFFER env var (default 0.05).
+    If the graph is too small, try larger buffers, then fallback to Beijing city graph.
+    """
     meta_path = str(osm_graph_path) + '.meta.json'
     if Path(osm_graph_path).exists() and Path(meta_path).exists():
         print("OSM graph already exists and is up-to-date.")
@@ -66,13 +82,48 @@ def ensure_osm_graph(osm_graph_path, periods_path, buffer=0.01):
     max_lat = max(periods['start_latitude'].max(), periods['end_latitude'].max())
     min_lon = min(periods['start_longitude'].min(), periods['end_longitude'].min())
     max_lon = max(periods['end_longitude'].max(), periods['end_longitude'].max())
-    bbox = (max_lat + buffer, min_lat - buffer, max_lon + buffer, min_lon - buffer)
-    G = ox.graph_from_bbox(bbox=bbox, network_type='drive')
+    # Buffer: argument > env var > default
+    tried_buffers = []
+    if buffer is None:
+        buffer = float(os.environ.get("OSM_GRAPH_BUFFER", 0.05))
+    for try_buffer in [buffer, 0.5, 1.0]:
+        tried_buffers.append(try_buffer)
+        bbox = (max_lat + try_buffer, min_lat - try_buffer, max_lon + try_buffer, min_lon - try_buffer)
+        print(f"OSMnx bbox (north, south, east, west): {bbox}")
+        print(f"  Covers lat: {min_lat-try_buffer:.6f} to {max_lat+try_buffer:.6f}")
+        print(f"  Covers lon: {min_lon-try_buffer:.6f} to {max_lon+try_buffer:.6f}")
+        G = ox.graph_from_bbox(bbox=bbox, network_type='drive')
+        print(f"Downloaded graph with {len(G.nodes)} nodes and {len(G.edges)} edges (buffer={try_buffer})")
+        if len(G.nodes) >= 10:
+            break
+    else:
+        print("WARNING: All bbox attempts resulted in too few nodes. Falling back to Beijing city graph.")
+        G = ox.graph_from_place('Beijing, China', network_type='drive')
+        print(f"Fallback Beijing graph: {len(G.nodes)} nodes, {len(G.edges)} edges")
     ox.save_graphml(G, osm_graph_path)
     write_meta(meta_path, {
         "graphml_hash": file_hash(osm_graph_path),
         "bbox": [min_lat, max_lat, min_lon, max_lon],
+        "tried_buffers": tried_buffers,
+        "final_node_count": len(G.nodes),
+        "final_edge_count": len(G.edges),
     })
+
+def save_step_stats(step_name: str, stats: dict, output_dir: str = "pipeline_stats"):
+    """Save statistics for a pipeline step to a JSON file.
+    
+    Args:
+        step_name: Name of the pipeline step
+        stats: Dictionary of statistics to save
+        output_dir: Directory to save stats files in
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_path = os.path.join(output_dir, f"{step_name}_stats_{timestamp}.json")
+    
+    with open(output_path, "w") as f:
+        json.dump(stats, f, indent=2, default=str)
+    logging.info(f"Saved {step_name} statistics to {output_path}")
 
 def compute_network_shortest_paths_batched(
     periods_path,
@@ -90,19 +141,59 @@ def compute_network_shortest_paths_batched(
     # Load periods
     periods_df = pd.read_parquet(periods_path)
     G = ox.load_graphml(osm_graph_path)
+    
+    # Initialize statistics
+    stats = {
+        "total_periods": len(periods_df),
+        "graph_info": {
+            "nodes": len(G.nodes),
+            "edges": len(G.edges),
+        },
+        "node_assignment": {
+            "total_points": 0,
+            "successful_assignments": 0,
+            "failed_assignments": 0,
+        },
+        "path_computation": {
+            "total_pairs": 0,
+            "successful_paths": 0,
+            "failed_paths": 0,
+            "same_node_pairs": 0,
+        },
+        "distance_stats": {
+            "min": None,
+            "max": None,
+            "mean": None,
+            "median": None,
+        },
+        "ratio_stats": {
+            "min": None,
+            "max": None,
+            "mean": None,
+            "median": None,
+            "nan_count": 0,
+        }
+    }
 
     # Precompute/caching nearest nodes for all unique points
+    # Create points in (lat, lon) order for OSMnx
     all_points = set(
-        list(zip(periods_df['start_longitude'], periods_df['start_latitude'])) +
-        list(zip(periods_df['end_longitude'], periods_df['end_latitude']))
+        list(zip(periods_df['start_latitude'], periods_df['start_longitude'])) +
+        list(zip(periods_df['end_latitude'], periods_df['end_longitude']))
     )
     logger.info(f"Caching nearest OSM nodes for {len(all_points)} unique points...")
     point_to_node = {}
-    for lon, lat in tqdm(all_points, desc="Nearest node cache"):
+    stats["node_assignment"]["total_points"] = len(all_points)
+    
+    for lat, lon in tqdm(all_points, desc="Nearest node cache"):
         try:
-            point_to_node[(lon, lat)] = ox.nearest_nodes(G, lon, lat)
-        except Exception:
-            point_to_node[(lon, lat)] = None
+            # OSMnx expects (y, x) order, i.e., (lat, lon)
+            point_to_node[(lat, lon)] = ox.nearest_nodes(G, lat, lon)
+            stats["node_assignment"]["successful_assignments"] += 1
+        except Exception as e:
+            logger.warning(f"Failed to find nearest node for point ({lat}, {lon}): {e}")
+            point_to_node[(lat, lon)] = None
+            stats["node_assignment"]["failed_assignments"] += 1
 
     # Unique key for checkpointing
     periods_df['unique_key'] = periods_df['license_plate'].astype(str) + '_' + periods_df['period_id'].astype(str)
@@ -122,19 +213,25 @@ def compute_network_shortest_paths_batched(
     logger.info(f"Processing {len(to_process)} new periods (skipping {len(done_keys)} already done).")
 
     # Group by unique start/end node pairs to avoid redundant shortest path calculations
-    to_process['start_node'] = [point_to_node.get((row['start_longitude'], row['start_latitude'])) for _, row in to_process.iterrows()]
-    to_process['end_node'] = [point_to_node.get((row['end_longitude'], row['end_latitude'])) for _, row in to_process.iterrows()]
+    to_process['start_node'] = [point_to_node.get((row['start_latitude'], row['start_longitude'])) for _, row in to_process.iterrows()]
+    to_process['end_node'] = [point_to_node.get((row['end_latitude'], row['end_longitude'])) for _, row in to_process.iterrows()]
     node_pairs = set(zip(to_process['start_node'], to_process['end_node']))
     node_pair_to_dist = {}
 
     def compute_pair(pair):
         orig, dest = pair
-        if orig is None or dest is None or orig == dest:
-            return pair, 0.0
+        if orig is None or dest is None:
+            return pair, float('nan')
+        if orig == dest:
+            # For same node, use a small distance (1 meter = 0.001 km)
+            return pair, 0.001
         try:
             dist = nx.shortest_path_length(G, orig, dest, weight='length') / 1000
+            if dist < 0.001:  # Less than 1 meter
+                dist = 0.001  # Set minimum distance to 1 meter
             return pair, dist
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to compute shortest path for {pair}: {e}")
             return pair, float('nan')
 
     # Use ThreadPoolExecutor to avoid pickling issues
@@ -147,16 +244,37 @@ def compute_network_shortest_paths_batched(
 
     # Assign distances to periods
     def get_dist(row):
-        # Skip if sum_distance is very small or start/end node is None or identical
-        if row['sum_distance'] < 0.01 or row['start_node'] is None or row['end_node'] is None or row['start_node'] == row['end_node']:
-            return 0.0
+        # Skip if start/end node is None
+        if row['start_node'] is None or row['end_node'] is None:
+            return float('nan')
+        # For very small actual distances, use minimum network distance
+        if row['sum_distance'] < 0.001:
+            return 0.001
         return node_pair_to_dist.get((row['start_node'], row['end_node']), float('nan'))
 
     # Process in batches
     all_results = []
+    all_distances = []
+    all_ratios = []
+    
     for i in tqdm(range(0, len(to_process), batch_size), desc="Batches"):
         batch = to_process.iloc[i:i+batch_size]
         batch['network_shortest_distance'] = batch.apply(get_dist, axis=1)
+        # Compute route deviation ratio, handling NaN and inf values
+        batch['route_deviation_ratio'] = batch.apply(
+            lambda row: row['sum_distance'] / row['network_shortest_distance']
+            if not pd.isna(row['network_shortest_distance']) and row['network_shortest_distance'] > 0
+            else float('nan'),
+            axis=1
+        )
+        
+        # Collect statistics
+        valid_distances = batch['network_shortest_distance'].dropna()
+        valid_ratios = batch['route_deviation_ratio'].replace([np.inf, -np.inf], np.nan).dropna()
+        all_distances.extend(valid_distances)
+        all_ratios.extend(valid_ratios)
+        stats["ratio_stats"]["nan_count"] += batch['route_deviation_ratio'].isna().sum()
+        
         all_results.append(batch)
         # Save checkpoint
         if os.path.exists(checkpoint_file):
@@ -170,7 +288,26 @@ def compute_network_shortest_paths_batched(
     if not done_df.empty:
         all_results.append(done_df)
     final_df = pd.concat(all_results, ignore_index=True)
-    final_df['route_deviation_ratio'] = final_df['sum_distance'] / final_df['network_shortest_distance']
+    
+    # Compute final statistics
+    if all_distances:
+        stats["distance_stats"].update({
+            "min": float(min(all_distances)),
+            "max": float(max(all_distances)),
+            "mean": float(np.mean(all_distances)),
+            "median": float(np.median(all_distances)),
+        })
+    if all_ratios:
+        stats["ratio_stats"].update({
+            "min": float(min(all_ratios)),
+            "max": float(max(all_ratios)),
+            "mean": float(np.mean(all_ratios)),
+            "median": float(np.median(all_ratios)),
+        })
+    
+    # Save statistics
+    save_step_stats("network_shortest_paths", stats)
+    
     final_df.to_parquet(output_path)
     logger.info(f"Saved final results to {output_path}")
 
@@ -181,12 +318,59 @@ def compute_network_outlier_flag(input_path, output_path, iqr_multiplier=1.5):
     if is_up_to_date(output_path, input_paths):
         print(f"{output_path} is up-to-date. Skipping computation.")
         return pd.read_parquet(output_path)
+    
+    # Setup logging
+    logger = logging.getLogger("network_outlier_flag")
+    
+    # Initialize statistics
+    stats = {
+        "input_shape": None,
+        "valid_ratios": 0,
+        "outliers": 0,
+        "quantiles": {
+            "q1": None,
+            "q3": None,
+            "iqr": None,
+            "threshold": None,
+        }
+    }
+    
     df = pd.read_parquet(input_path)
-    q1 = df['route_deviation_ratio'].quantile(0.25)
-    q3 = df['route_deviation_ratio'].quantile(0.75)
-    iqr = q3 - q1
-    threshold = q3 + iqr_multiplier * iqr
-    df['is_network_outlier'] = df['route_deviation_ratio'] > threshold
+    stats["input_shape"] = list(df.shape)
+    
+    # Filter out NaN and infinite values before computing quantiles
+    valid_ratios = df['route_deviation_ratio'].replace([np.inf, -np.inf], np.nan).dropna()
+    stats["valid_ratios"] = len(valid_ratios)
+    
+    if len(valid_ratios) == 0:
+        logger.warning("No valid route_deviation_ratio values found. Setting all outlier flags to NaN.")
+        df['is_network_outlier'] = np.nan
+    else:
+        q1 = valid_ratios.quantile(0.25)
+        q3 = valid_ratios.quantile(0.75)
+        iqr = q3 - q1
+        threshold = q3 + iqr_multiplier * iqr
+        
+        stats["quantiles"].update({
+            "q1": float(q1),
+            "q3": float(q3),
+            "iqr": float(iqr),
+            "threshold": float(threshold),
+        })
+        
+        # Set outlier flag, handling NaN and inf values
+        df['is_network_outlier'] = df['route_deviation_ratio'].apply(
+            lambda x: True if pd.notna(x) and not np.isinf(x) and x > threshold else False
+        )
+        
+        stats["outliers"] = int(df['is_network_outlier'].sum())
+        
+        logger.info(f"Network ratio outlier threshold: {threshold:.2f} (Q1={q1:.2f}, Q3={q3:.2f}, IQR={iqr:.2f})")
+        logger.info(f"Found {stats['outliers']} network outliers out of {stats['valid_ratios']} valid ratios")
+    
+    # Save statistics
+    save_step_stats("network_outlier_flag", stats)
+    
     df.to_parquet(output_path)
     write_meta(str(output_path) + '.meta.json', {
         "network_ratio_hash": file_hash(input_path)
@@ -276,14 +460,16 @@ def clean_step_outputs(step):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--clean", action="store_true", help="Remove all checkpoints, meta, and intermediate outputs before running pipeline.")
-    parser.add_argument("--clean-step", type=str, help="Remove outputs/meta/checkpoints for a specific step only. Valid steps: cleaned_points, cleaned_with_period_id, periods_with_sld_ratio, network, osm_graph.")
+    parser.add_argument("--clean-step", type=str, help="Remove outputs/meta/checkpoints for specific steps (comma-separated). Valid steps: cleaned_points, cleaned_with_period_id, periods_with_sld_ratio, network, osm_graph.")
     args = parser.parse_args()
     if args.clean and args.clean_step:
         parser.error("--clean and --clean-step cannot be used together.")
     if args.clean:
         clean_pipeline_outputs()
     if args.clean_step:
-        clean_step_outputs(args.clean_step)
+        steps = [s.strip() for s in args.clean_step.split(",")]
+        for step in steps:
+            clean_step_outputs(step)
 
     configure_logging()
     logging.info("Starting indicators pipeline (pure Python version)")

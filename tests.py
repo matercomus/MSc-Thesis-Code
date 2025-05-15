@@ -895,3 +895,173 @@ def test_osm_graph_bbox_covers_data(tmp_path, monkeypatch):
     # Optionally, check that the bbox includes all period coordinates
     assert bbox[1] <= df['start_latitude'].min() <= bbox[0]
     assert bbox[3] <= df['start_longitude'].min() <= bbox[2]
+
+def test_network_stats_saved(tmp_path):
+    """Test that network statistics are properly saved."""
+    import networkx as nx
+    import pandas as pd
+    import json
+    from new_indicators_pipeline import compute_network_shortest_paths_batched
+    
+    # Create test graph and data
+    G = nx.DiGraph()
+    G.add_node("1", x="0.0", y="0.0")
+    G.add_node("2", x="1.0", y="0.0")
+    G.add_edge("1", "2", length="1.0")
+    G.graph['crs'] = 'EPSG:4326'
+    graphml_path = tmp_path / "test.graphml"
+    nx.write_graphml(G, graphml_path)
+    
+    df = pd.DataFrame({
+        'license_plate': ['A', 'B'],
+        'period_id': [1, 2],
+        'start_longitude': [0.0, 0.0],
+        'start_latitude': [0.0, 0.0],
+        'end_longitude': [1.0, 1.0],
+        'end_latitude': [0.0, 0.0],
+        'sum_distance': [1.5, 2.0],
+    })
+    periods_path = tmp_path / "periods.parquet"
+    df.to_parquet(periods_path)
+    
+    # Create stats directory
+    stats_dir = tmp_path / "pipeline_stats"
+    os.makedirs(stats_dir)
+    
+    # Run function
+    result = compute_network_shortest_paths_batched(
+        periods_path=periods_path,
+        osm_graph_path=graphml_path,
+        output_path=tmp_path / "out.parquet",
+        batch_size=1,
+        num_workers=1,
+        checkpoint_dir=tmp_path / "checkpoints",
+    )
+    
+    # Check that stats file was created
+    stats_files = list(stats_dir.glob("network_shortest_paths_*.json"))
+    assert len(stats_files) == 1
+    
+    # Load and verify stats
+    with open(stats_files[0]) as f:
+        stats = json.load(f)
+    
+    assert stats["total_periods"] == 2
+    assert stats["graph_info"]["nodes"] == 2
+    assert stats["graph_info"]["edges"] == 1
+    assert stats["node_assignment"]["total_points"] == 4  # 2 periods * 2 points each
+    assert stats["distance_stats"]["min"] is not None
+    assert stats["ratio_stats"]["min"] is not None
+
+def test_ensure_osm_graph_bbox(tmp_path, monkeypatch):
+    """Test that ensure_osm_graph uses correct bbox coordinates."""
+    import pandas as pd
+    import networkx as nx
+    from new_indicators_pipeline import ensure_osm_graph
+    
+    # Create test periods data
+    df = pd.DataFrame({
+        'start_latitude': [39.9, 40.0],
+        'start_longitude': [116.3, 116.4],
+        'end_latitude': [39.8, 40.1],
+        'end_longitude': [116.2, 116.5],
+    })
+    periods_path = tmp_path / "periods.parquet"
+    df.to_parquet(periods_path)
+    
+    # Mock ox.graph_from_bbox to capture bbox args
+    bbox_args = []
+    def mock_graph_from_bbox(bbox, network_type):
+        bbox_args.append(bbox)
+        G = nx.Graph()
+        G.graph['crs'] = 'EPSG:4326'
+        return G
+    
+    monkeypatch.setattr('osmnx.graph_from_bbox', mock_graph_from_bbox)
+    
+    # Run function
+    ensure_osm_graph(tmp_path / "test.graphml", periods_path)
+    
+    # Check bbox args
+    assert len(bbox_args) == 1
+    bbox = bbox_args[0]
+    # Check order: north, south, east, west
+    assert bbox[0] == 40.1  # north = max lat
+    assert bbox[1] == 39.8  # south = min lat
+    assert bbox[2] == 116.5  # east = max lon
+    assert bbox[3] == 116.2  # west = min lon
+
+def test_network_distance_validation(tmp_path, monkeypatch):
+    """Test that network distances are properly validated and computed."""
+    import networkx as nx
+    import pandas as pd
+    import osmnx as ox
+    from new_indicators_pipeline import compute_network_shortest_paths_batched
+    
+    # Create a more complex test graph
+    G = nx.Graph()
+    G.add_node(1, x=0.0, y=0.0)
+    G.add_node(2, x=1.0, y=0.0)
+    G.add_node(3, x=0.0, y=1.0)
+    G.add_edge(1, 2, length=1000.0)  # 1km
+    G.add_edge(2, 3, length=2000.0)  # 2km
+    G.add_edge(1, 3, length=2500.0)  # 2.5km
+    G.graph['crs'] = 'EPSG:4326'
+    
+    graphml_path = tmp_path / "test.graphml"
+    nx.write_graphml(G, graphml_path)
+    
+    # Create test data with various edge cases
+    df = pd.DataFrame({
+        'license_plate': ['A', 'B', 'C', 'D'],
+        'period_id': [1, 2, 3, 4],
+        'start_latitude': [0.0, 0.0, 0.0, 0.0],
+        'start_longitude': [0.0, 0.0, 0.0, 0.0],
+        'end_latitude': [0.0, 1.0, 0.0, 1.0],
+        'end_longitude': [1.0, 0.0, 0.0, 1.0],
+        'sum_distance': [1.5, 2.5, 0.0005, 3.5],  # Normal, Long, Very short, Diagonal
+    })
+    periods_path = tmp_path / "periods.parquet"
+    df.to_parquet(periods_path)
+    
+    # Mock nearest_nodes to return known nodes
+    def mock_nearest_nodes(G, lat, lon):
+        if (lat, lon) == (0.0, 0.0):
+            return 1
+        elif (lat, lon) == (0.0, 1.0):
+            return 2
+        elif (lat, lon) == (1.0, 0.0):
+            return 3
+        elif (lat, lon) == (1.0, 1.0):
+            return 3
+        return None
+    
+    monkeypatch.setattr(ox, "load_graphml", lambda path: G)
+    monkeypatch.setattr(ox, "nearest_nodes", mock_nearest_nodes)
+    
+    # Run function
+    result = compute_network_shortest_paths_batched(
+        periods_path=periods_path,
+        osm_graph_path=graphml_path,
+        output_path=tmp_path / "out.parquet",
+        batch_size=1,
+        num_workers=1,
+        checkpoint_dir=tmp_path / "checkpoints"
+    )
+    
+    # Check results
+    assert len(result) == 4
+    
+    # Check that very short distances are handled properly
+    short_dist = result[result['period_id'] == 3]['network_shortest_distance'].iloc[0]
+    assert short_dist == 0.001  # Should use minimum distance
+    
+    # Check that normal distances are computed correctly
+    normal_dist = result[result['period_id'] == 1]['network_shortest_distance'].iloc[0]
+    assert 0.9 < normal_dist < 1.1  # Should be about 1km
+    
+    # Check that route deviation ratios are reasonable
+    ratios = result['route_deviation_ratio'].dropna()
+    assert len(ratios) > 0
+    assert all(ratios > 0)  # All ratios should be positive
+    assert all(ratios < 10)  # Ratios shouldn't be unreasonably large
