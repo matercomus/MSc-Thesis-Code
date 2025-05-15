@@ -7,9 +7,19 @@ import polars as pl
 import hashlib
 import plotly.express as px
 from plotly.graph_objects import Figure
+import os
 
 # Constants
-PERIOD_FILE = "data/periods_with_sld_ratio.parquet"
+def get_period_file():
+    # Prefer the most enriched file if present
+    if os.path.exists("data/periods_with_network_ratio_flagged.parquet"):
+        return "data/periods_with_network_ratio_flagged.parquet"
+    elif os.path.exists("data/periods_with_network_ratio.parquet"):
+        return "data/periods_with_network_ratio.parquet"
+    else:
+        return "data/periods_with_sld_ratio.parquet"
+
+PERIOD_FILE = get_period_file()
 DATA_FILE = "data/cleaned_with_period_id_in_beijing.parquet"
 
 def anonymize_text(text: str) -> str:
@@ -31,12 +41,17 @@ def get_period_ids(lp: str) -> list:
 
 @st.cache_data
 def get_period_info(lp: str, period_id) -> pl.DataFrame:
-    """Return the metadata row for a given license plate and period_id."""
-    return (
+    """Return the metadata row for a given license plate and period_id, including network indicator if present."""
+    df = (
         pl.scan_parquet(PERIOD_FILE)
         .filter((pl.col("license_plate") == lp) & (pl.col("period_id") == period_id))
         .collect()
     )
+    # Add missing columns as null if not present
+    for col in ["route_deviation_ratio", "is_network_outlier"]:
+        if col not in df.columns:
+            df = df.with_columns(pl.lit(None).alias(col))
+    return df
 
 @st.cache_data
 def get_trajectory(lp: str, period_id) -> pl.DataFrame:
@@ -102,23 +117,24 @@ def create_trajectory_plot(traj_df: pl.DataFrame, bg_osm: bool = True) -> Figure
     
     return fig
 
-def get_filtered_periods(filter_sld: str, filter_if: str, filter_occ: list, hide_small: bool) -> pl.LazyFrame:
-    """Get filtered periods based on the provided filters."""
+def get_filtered_periods(filter_sld: str, filter_if: str, filter_network: str, filter_occ: list, hide_small: bool) -> pl.LazyFrame:
+    """Get filtered periods based on the provided filters, including network outlier if requested."""
     periods_lf = pl.scan_parquet(PERIOD_FILE)
-    
     if filter_sld != "All":
         want_sld = (filter_sld == "Only outliers")
         periods_lf = periods_lf.filter(pl.col("is_sld_outlier") == want_sld)
-    
     if filter_if != "All":
         want_if = (filter_if == "Only outliers")
         periods_lf = periods_lf.filter(pl.col("is_traj_outlier") == want_if)
-    
+    if filter_network != "All":
+        want_network = (filter_network == "Only outliers")
+        try:
+            periods_lf = periods_lf.filter(pl.col("is_network_outlier") == want_network)
+        except Exception:
+            pass
     periods_lf = periods_lf.filter(pl.col("occupancy_status").is_in(filter_occ))
-    
     if hide_small:
         periods_lf = periods_lf.filter(pl.col("sum_distance") >= 1.0)
-    
     return periods_lf
 
 def handle_license_plate_state(privacy_mode: bool, lp_list: list, display_lp_list: list, current_lp: str) -> str:

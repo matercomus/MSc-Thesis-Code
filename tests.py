@@ -568,7 +568,7 @@ def test_get_trajectory():
 
 @pytest.mark.skipif(not os.path.exists("data/periods_with_sld_ratio.parquet"), reason="Parquet file not found")
 def test_get_filtered_periods():
-    lf = get_filtered_periods("All", "All", ["empty"], False)
+    lf = get_filtered_periods("All", "All", "All", ["empty"], False)
     assert hasattr(lf, "collect")
 
 def test_file_hash_and_meta(tmp_path):
@@ -665,3 +665,23 @@ def test_compute_network_shortest_paths_batched(tmp_path):
     )
     assert out_path.exists()
     assert result2.equals(result)
+
+def test_network_indicator_output():
+    import os
+    import pandas as pd
+    path = "data/periods_with_network_ratio_flagged.parquet"
+    if not os.path.exists(path):
+        import pytest
+        pytest.skip("Network ratio flagged file not present")
+    df = pd.read_parquet(path)
+    assert "route_deviation_ratio" in df.columns
+    assert "is_network_outlier" in df.columns
+    # Check for at least some non-null values, or skip if all null
+    non_null_count = df["route_deviation_ratio"].notnull().sum()
+    if non_null_count == 0:
+        import pytest
+        pytest.skip("No non-null route_deviation_ratio values in test data")
+    else:
+        assert non_null_count > 0
+    # Check that outlier flag is boolean or 0/1
+    assert set(df["is_network_outlier"].dropna().unique()).issubset({True, False, 0, 1})

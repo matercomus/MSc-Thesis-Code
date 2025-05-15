@@ -15,3 +15,8 @@ threshold_analysis_*
 .vscode/settings.json
 
 data/
+cache/
+checkpoints/
+
+beijing_drive.graphml
+beijing_drive.graphml.meta.json

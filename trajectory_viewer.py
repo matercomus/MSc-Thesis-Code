@@ -57,6 +57,14 @@ def setup_sidebar():
         key="filter_if"
     )
     
+    # Network outlier filter (new)
+    filter_network = st.sidebar.selectbox(
+        "Network outlier status",
+        ["All", "Only outliers", "Only non-outliers"],
+        index=0,
+        key="filter_network"
+    )
+    
     # Get occupancy status options
     periods_lf = pl.scan_parquet("data/periods_with_sld_ratio.parquet")
     occ_df = (
@@ -80,7 +88,7 @@ def setup_sidebar():
         key="hide_small"
     )
     
-    return privacy_mode, filter_sld, filter_if, filter_occ, hide_small
+    return privacy_mode, filter_sld, filter_if, filter_network, filter_occ, hide_small
 
 def display_trajectory_info(lp: str, period_id: int, privacy_mode: bool):
     """Display trajectory information and metadata."""
@@ -101,13 +109,37 @@ def display_trajectory_info(lp: str, period_id: int, privacy_mode: bool):
             st.markdown("<h3 style='color:red'>ABNORMAL (IF)</h3>", unsafe_allow_html=True)
     except Exception:
         pass
+    
+    try:
+        is_network_outlier = info_df["is_network_outlier"][0]
+        if is_network_outlier:
+            st.markdown("<h3 style='color:red'>ABNORMAL (Network Route)</h3>", unsafe_allow_html=True)
+    except Exception:
+        pass
+    
+    # Show route_deviation_ratio if present
+    try:
+        ratio = info_df["route_deviation_ratio"][0]
+        if ratio is not None:
+            st.markdown(f"**Route Deviation Ratio:** {ratio:.2f}")
+    except Exception:
+        pass
 
 def main():
     # Setup sidebar and get filter values
-    privacy_mode, filter_sld, filter_if, filter_occ, hide_small = setup_sidebar()
+    privacy_mode, filter_sld, filter_if, filter_network, filter_occ, hide_small = setup_sidebar()
     
     # Get filtered periods
     periods_lf = get_filtered_periods(filter_sld, filter_if, filter_occ, hide_small)
+    
+    # Apply network outlier filter if the column exists
+    if filter_network != "All":
+        want_network = (filter_network == "Only outliers")
+        # Try to filter if the column exists
+        try:
+            periods_lf = periods_lf.filter(pl.col("is_network_outlier") == want_network)
+        except Exception:
+            pass
     
     # Compute counts per license plate
     lp_counts = (

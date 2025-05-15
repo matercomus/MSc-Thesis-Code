@@ -26,6 +26,8 @@ This repository implements a complete pipeline for processing, cleaning, and ana
     - `data/cleaned_points_in_beijing.parquet`: points after removing taxis with point-level anomalies.
     - `data/cleaned_with_period_id_in_beijing.parquet`: cleaned points annotated with period IDs.
     - `data/periods_in_beijing.parquet`, `data/periods_with_sld_ratio.parquet`: enriched per-period summaries.
+    - `data/periods_with_network_ratio.parquet`: period summaries with network-based indicator.
+    - `data/periods_with_network_ratio_flagged.parquet`: with network outlier flag.
   - Timestamped result directories from `threshold_analysis.py` containing detailed CSV and PNG investigation artifacts (these are not in `data/`).
 
 ## 1. Data Compression
@@ -111,6 +113,19 @@ This repository implements a complete pipeline for processing, cleaning, and ana
 - **Period-Level Anomalies**:
   - *Isolation Forest (IF)*: flag periods with any IF-detected point outliers (`is_traj_outlier`)
   - *SLD Ratio*: sum_distance / straight_line_distance_km; periods with sld_ratio > Q3 + 1.5×IQR are flagged (`is_sld_outlier`)
+  - *Network Route Deviation Ratio*: sum_distance / network_shortest_distance, where network_shortest_distance is computed using the shortest path on the real Beijing road network (via OSMnx/NetworkX). Periods with route_deviation_ratio > Q3 + 1.5×IQR are flagged (`is_network_outlier`).
+
+### Network Route Deviation Ratio
+
+- **Computation**: For each period, the shortest path between the start and end GPS points is computed using the OSM road network (downloaded and cached as `beijing_drive.graphml`). The ratio of actual driven distance to this network shortest path is the indicator.
+- **Efficiency**: The computation is batched, multi-threaded, and checkpointed (see `network_checkpoints/`). If interrupted, it resumes from the last checkpoint.
+- **Outputs**:
+  - `data/periods_with_network_ratio.parquet`: period summary with `network_shortest_distance` and `route_deviation_ratio`.
+  - `data/periods_with_network_ratio_flagged.parquet`: same, with `is_network_outlier` flag.
+  - `beijing_drive.graphml`: OSM road network for Beijing (downloaded once).
+  - `network_checkpoints/`: stores progress for resumable computation.
+
+All outputs are written to the `data/` folder (except the OSM graph and checkpoints).
 
 ## 5. Example Visualizations
 

@@ -388,7 +388,6 @@ def summarize_periods(df: pl.DataFrame) -> pl.DataFrame:
         (pl.col("end_time") - pl.col("start_time")).alias("duration")
     )
 
-        # Compute straight line distance if latitude/longitude available
     if has_latlon:
         start_lats = grouped["start_latitude"].to_list()
         start_lons = grouped["start_longitude"].to_list()
@@ -405,10 +404,7 @@ def summarize_periods(df: pl.DataFrame) -> pl.DataFrame:
             pl.Series("straight_line_distance_km", distances)
         )
 
-        # Drop intermediate latitude/longitude columns
-        grouped = grouped.drop(
-            ["start_latitude", "start_longitude", "end_latitude", "end_longitude"]
-        )
+        # Do NOT drop start_latitude, start_longitude, end_latitude, end_longitude
         # Compute sum-to-straight-line distance ratio (higher values indicate longer path vs direct distance)
         grouped = grouped.with_columns(
             (
@@ -419,7 +415,7 @@ def summarize_periods(df: pl.DataFrame) -> pl.DataFrame:
         )
 
     return grouped
- 
+
 def detect_outliers_pd(
     df: pd.DataFrame,
     contamination: float = 0.05,
