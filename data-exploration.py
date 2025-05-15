@@ -35,7 +35,7 @@ def _():
 @app.cell
 def _(filter_chinese_license_plates, pl, profile_data):
     # File path to your Parquet file
-    parquet_file_path = "2019.11.25.parquet"
+    parquet_file_path = "data/2019.11.25.parquet"
 
     # Load the Parquet file lazily using Polars
     ldf = pl.scan_parquet(parquet_file_path)
@@ -180,7 +180,7 @@ def _(summary_ldf_lp_filtered_2019_11_25):
 
 @app.cell
 def _(ldf_lp_filtered_2019_11_25):
-    ldf_lp_filtered_2019_11_25.sink_parquet("ldf_lp_filtered_2019_11_25.parquet")
+    ldf_lp_filtered_2019_11_25.sink_parquet("data/ldf_lp_filtered_2019_11_25.parquet")
     return
 
 

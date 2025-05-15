@@ -10,8 +10,8 @@ Requirements:
 Usage:
     streamlit run trajectory_viewer.py
 
-Ensure that the Parquet files 'periods_with_sld_ratio.parquet' and 'cleaned_with_period_id_in_beijing.parquet'
-are in the same directory as this script.
+Ensure that the Parquet files 'data/periods_with_sld_ratio.parquet' and 'data/cleaned_with_period_id_in_beijing.parquet'
+are in the data directory relative to this script.
 """
 
 import streamlit as st
@@ -58,7 +58,7 @@ def setup_sidebar():
     )
     
     # Get occupancy status options
-    periods_lf = pl.scan_parquet("periods_with_sld_ratio.parquet")
+    periods_lf = pl.scan_parquet("data/periods_with_sld_ratio.parquet")
     occ_df = (
         periods_lf.select("occupancy_status")
         .unique()

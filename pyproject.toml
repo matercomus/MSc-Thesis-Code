@@ -17,3 +17,10 @@ lsp = true
 
 [tool.marimo.diagnostics]
 enabled = true
+
+[project.scripts]
+pytest = "pytest:main"
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+python_files = ["tests.py"]

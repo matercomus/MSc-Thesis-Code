@@ -16,7 +16,7 @@ def _():
 
 @app.cell
 def _(pl):
-    ldf = pl.scan_parquet("ldf_lp_filtered_2019_11_25.parquet")
+    ldf = pl.scan_parquet("data/ldf_lp_filtered_2019_11_25.parquet")
     return (ldf,)
 
 
@@ -99,7 +99,7 @@ def _(pl, points_in_beijing):
 
 @app.cell
 def _(df_filtered_lazy_2):
-    df_filtered_lazy_2.sink_parquet("filtered_points_in_beijing.parquet")
+    df_filtered_lazy_2.sink_parquet("data/filtered_points_in_beijing.parquet")
     return
 
 

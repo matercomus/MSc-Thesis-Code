@@ -546,24 +546,24 @@ import os
 import pytest
 from trajectory_utils import get_period_ids, get_period_info, get_trajectory, get_filtered_periods
 
-@pytest.mark.skipif(not os.path.exists("periods_with_sld_ratio.parquet"), reason="Parquet file not found")
+@pytest.mark.skipif(not os.path.exists("data/periods_with_sld_ratio.parquet"), reason="Parquet file not found")
 def test_get_period_ids():
     # Just test that it runs and returns a list
     ids = get_period_ids("some_plate")
     assert isinstance(ids, list)
 
-@pytest.mark.skipif(not os.path.exists("periods_with_sld_ratio.parquet"), reason="Parquet file not found")
+@pytest.mark.skipif(not os.path.exists("data/periods_with_sld_ratio.parquet"), reason="Parquet file not found")
 def test_get_period_info():
     # Just test that it runs and returns a DataFrame
     df = get_period_info("some_plate", 1)
     assert isinstance(df, pl.DataFrame)
 
-@pytest.mark.skipif(not os.path.exists("cleaned_with_period_id_in_beijing.parquet"), reason="Parquet file not found")
+@pytest.mark.skipif(not os.path.exists("data/cleaned_with_period_id_in_beijing.parquet"), reason="Parquet file not found")
 def test_get_trajectory():
     df = get_trajectory("some_plate", 1)
     assert isinstance(df, pl.DataFrame)
 
-@pytest.mark.skipif(not os.path.exists("periods_with_sld_ratio.parquet"), reason="Parquet file not found")
+@pytest.mark.skipif(not os.path.exists("data/periods_with_sld_ratio.parquet"), reason="Parquet file not found")
 def test_get_filtered_periods():
     lf = get_filtered_periods("All", "All", ["empty"], False)
     assert hasattr(lf, "collect")

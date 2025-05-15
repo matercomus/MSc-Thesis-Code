@@ -29,7 +29,7 @@ def _(gpd):
 
 @app.cell
 def _(pl):
-    filtered_points_in_beijing = pl.scan_parquet("filtered_points_in_beijing.parquet")
+    filtered_points_in_beijing = pl.scan_parquet("data/filtered_points_in_beijing.parquet")
     return (filtered_points_in_beijing,)
 
 

@@ -9,8 +9,8 @@ import plotly.express as px
 from plotly.graph_objects import Figure
 
 # Constants
-PERIOD_FILE = "periods_with_sld_ratio.parquet"
-DATA_FILE = "cleaned_with_period_id_in_beijing.parquet"
+PERIOD_FILE = "data/periods_with_sld_ratio.parquet"
+DATA_FILE = "data/cleaned_with_period_id_in_beijing.parquet"
 
 def anonymize_text(text: str) -> str:
     """Anonymize text by creating a deterministic hash."""

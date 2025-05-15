@@ -26,8 +26,8 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     print(f"Results will be saved to: {out_dir}")
     # Load filtered raw points (including occupancy status)
-    print("Loading filtered_points_in_beijing.parquet...")
-    lazy_full = pl.scan_parquet("filtered_points_in_beijing.parquet")
+    print("Loading data/filtered_points_in_beijing.parquet...")
+    lazy_full = pl.scan_parquet("data/filtered_points_in_beijing.parquet")
 
     # Compute time and speed features on full dataset, then restrict to contiguous occupied segments
     print("Computing time differences and implied speeds for contiguous occupancy=1 segments...")

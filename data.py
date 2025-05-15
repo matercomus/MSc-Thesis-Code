@@ -199,7 +199,7 @@ if __name__ == "__main__":
     # Example configuration
     config = {
         "csv_path": "2019.11.25.csv",
-        "output_path": "2019.11.25.parquet",
+        "output_path": "data/2019.11.25.parquet",
         "compression": "zstd",
         # Optionally specify columns, otherwise uses default
         # "keep_columns": "license_plate,timestamp,longitude,latitude,instant_speed,occupancy_status",

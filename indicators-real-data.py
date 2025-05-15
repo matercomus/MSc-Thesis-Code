@@ -1,5 +1,3 @@
-
-
 import marimo
 
 __generated_with = "0.13.0"
@@ -46,10 +44,10 @@ def _(configure_logging, pl, add_time_distance_calcs, add_implied_speed, compute
     configure_logging()
     # Compute thresholds based on IQR method (Q3 + 1.5*IQR)
     time_gap_th, speed_th = compute_iqr_thresholds(
-        pl.scan_parquet("filtered_points_in_beijing.parquet")
+        pl.scan_parquet("data/filtered_points_in_beijing.parquet")
     )
     # Load full data for pipeline
-    lazy_df = pl.scan_parquet("filtered_points_in_beijing.parquet")
+    lazy_df = pl.scan_parquet("data/filtered_points_in_beijing.parquet")
     # Return constants and data
     return speed_th, time_gap_th, lazy_df
 
@@ -115,7 +113,7 @@ def _(pl, results):
     )
 
     # Sink cleaned lazy DF
-    cleaned_lazy_df.sink_parquet("cleaned_points_in_beijing.parquet")
+    cleaned_lazy_df.sink_parquet("data/cleaned_points_in_beijing.parquet")
     return (cleaned_lazy_df,)
 
 
@@ -138,9 +136,9 @@ def _(add_period_id, cleaned_lazy_df, summarize_periods):
 @app.cell
 def _(period_lazy_df):
     # Sink periods with summarized metrics
-    period_lazy_df.sink_parquet("periods_in_beijing.parquet")
+    period_lazy_df.sink_parquet("data/periods_in_beijing.parquet")
     # Also save with straight-line to sum-distance ratio
-    period_lazy_df.sink_parquet("periods_with_sld_ratio.parquet")
+    period_lazy_df.sink_parquet("data/periods_with_sld_ratio.parquet")
     return
 
 
@@ -173,7 +171,7 @@ def _(cleaned_lazy_df, period_lazy_df, pl):
 @app.cell
 def _(cleaned_with_period_id_df):
     cleaned_with_period_id_df.sink_parquet(
-        "cleaned_with_period_id_in_beijing.parquet"
+        "data/cleaned_with_period_id_in_beijing.parquet"
     )
     return
 
@@ -198,7 +196,7 @@ def main():
 
 
     # Load filtered points
-    lazy_df = pl.scan_parquet("filtered_points_in_beijing.parquet")
+    lazy_df = pl.scan_parquet("data/filtered_points_in_beijing.parquet")
 
     # Setup
     pl.enable_string_cache()
@@ -253,7 +251,7 @@ def main():
         .drop(["is_temporal_gap", "is_position_jump"])
         .lazy()
     )
-    cleaned_lazy_df.sink_parquet("cleaned_points_in_beijing.parquet")
+    cleaned_lazy_df.sink_parquet("data/cleaned_points_in_beijing.parquet")
 
     # Summarize periods and compute straight-line distance ratios
     # Base period summary
@@ -300,8 +298,8 @@ def main():
     )
     # Sink enriched periods
     period_lazy_df = period_df.lazy()
-    period_lazy_df.sink_parquet("periods_in_beijing.parquet")
-    period_lazy_df.sink_parquet("periods_with_sld_ratio.parquet")
+    period_lazy_df.sink_parquet("data/periods_in_beijing.parquet")
+    period_lazy_df.sink_parquet("data/periods_with_sld_ratio.parquet")
 
     # Attach period_id back to cleaned points and sink
     cleaned_with_period_id_df = cleaned_lazy_df.join(
@@ -312,7 +310,7 @@ def main():
         (pl.col("timestamp") >= pl.col("start_time")) & (pl.col("timestamp") <= pl.col("end_time"))
     )
     cleaned_with_period_id_df.sink_parquet(
-        "cleaned_with_period_id_in_beijing.parquet"
+        "data/cleaned_with_period_id_in_beijing.parquet"
     )
     print("Pipeline completed: parquet files written.")
 
