@@ -139,6 +139,8 @@ def get_filtered_periods(filter_sld: str, filter_if: str, filter_network: str, f
 
 def handle_license_plate_state(privacy_mode: bool, lp_list: list, display_lp_list: list, current_lp: str) -> str:
     """Handle license plate state transitions when privacy mode changes."""
+    if not lp_list or not display_lp_list:
+        return None
     if privacy_mode:
         if current_lp in lp_list:
             return anonymize_text(current_lp)
@@ -150,5 +152,4 @@ def handle_license_plate_state(privacy_mode: bool, lp_list: list, display_lp_lis
             return lp_list[idx]
         elif current_lp not in lp_list:
             return lp_list[0]
-    
     return current_lp

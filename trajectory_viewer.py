@@ -130,7 +130,7 @@ def main():
     privacy_mode, filter_sld, filter_if, filter_network, filter_occ, hide_small = setup_sidebar()
     
     # Get filtered periods
-    periods_lf = get_filtered_periods(filter_sld, filter_if, filter_occ, hide_small)
+    periods_lf = get_filtered_periods(filter_sld, filter_if, filter_network, filter_occ, hide_small)
     
     # Apply network outlier filter if the column exists
     if filter_network != "All":
@@ -176,6 +176,9 @@ def main():
     if "lp" in st.session_state:
         current_lp = st.session_state.lp
         new_lp = handle_license_plate_state(privacy_mode, lp_list, display_lp_list, current_lp)
+        if new_lp is None:
+            st.warning("No license plates available for the current filters.")
+            return
         if new_lp != current_lp:
             st.session_state.lp = new_lp
     
