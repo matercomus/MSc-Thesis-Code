@@ -101,6 +101,23 @@ This repository implements a complete pipeline for processing, cleaning, and ana
       - `straight_line_distance_km`, `sld_ratio`
  
 
+## Project State & Memory Efficiency
+
+- The pipeline is now **fully memory-efficient** and robust for very large datasets. All major steps, especially the network shortest path computation, are processed in true batches using **Polars streaming**.
+- The network shortest path step (route deviation ratio) is now implemented with Polars streaming and batch processing, with batch size configurable in `pipeline_utils.py`.
+- The function `compute_network_outlier_flag` is implemented in `pipeline_utils.py` and flags network outliers using an IQR-based threshold on `route_deviation_ratio`. All outlier flagging (point, SLD, network) is now fully automated and reproducible.
+- The pipeline can **resume from checkpoints** for the network step, and all steps are robust to out-of-memory errors.
+- The codebase is organized for maintainability, with step helpers and utility functions in `pipeline_utils.py` and `utils.py`.
+- The pipeline is pure Python, with no notebooks required, and is suitable for very large datasets.
+
+### Tuning for Memory-Constrained Environments
+- You can tune the batch size for the network step by changing the `batch_size` argument in `pipeline_utils.py` (default: 100). If you encounter memory errors, reduce this value further.
+- All batch steps use progress bars and detailed logging for each batch, including memory usage and timing.
+
+### Troubleshooting
+- **Memory errors?** Reduce `batch_size` in `pipeline_utils.py` for the network step.
+- **Pipeline resumes from checkpoint** if interrupted during the network step.
+
 ## 4. Anomaly-Detection Indicators (in `new_indicators_pipeline.py`)
 
 - **Point-Level Anomalies**:
@@ -114,14 +131,16 @@ This repository implements a complete pipeline for processing, cleaning, and ana
   - *Isolation Forest (IF)*: flag periods with any IF-detected point outliers (`is_traj_outlier`)
   - *SLD Ratio*: sum_distance / straight_line_distance_km; periods with sld_ratio > Q3 + 1.5×IQR are flagged (`is_sld_outlier`)
   - *Network Route Deviation Ratio*: sum_distance / network_shortest_distance, where network_shortest_distance is computed using the shortest path on the real Beijing road network (via OSMnx/NetworkX). Periods with route_deviation_ratio > Q3 + 1.5×IQR are flagged (`is_network_outlier`).
+  - **All outlier flagging is now fully automated and reproducible.**
 
 ### Network Route Deviation Ratio
 
 - **Computation**: For each period, the shortest path between the start and end GPS points is computed using the OSM road network (downloaded and cached as `beijing_drive.graphml`). The ratio of actual driven distance to this network shortest path is the indicator.
-- **Efficiency**: The computation is batched, multi-threaded, and checkpointed (see `network_checkpoints/`). If interrupted, it resumes from the last checkpoint.
+- **Efficiency**: The computation is batched, multi-threaded, and checkpointed (see `network_checkpoints/`). If interrupted, it resumes from the last checkpoint. **Polars streaming** is used for true batch processing, and memory usage is minimized.
+- **Batch Size**: The batch size for the network step is configurable in `pipeline_utils.py` (default: 100). Lower this value if you encounter memory issues.
 - **Outputs**:
   - `data/periods_with_network_ratio.parquet`: period summary with `network_shortest_distance` and `route_deviation_ratio`.
-  - `data/periods_with_network_ratio_flagged.parquet`: same, with `is_network_outlier` flag.
+  - `data/periods_with_network_ratio_flagged.parquet`: same, with `is_network_outlier` flag (computed by `compute_network_outlier_flag`).
   - `beijing_drive.graphml`: OSM road network for Beijing (downloaded once).
   - `network_checkpoints/`: stores progress for resumable computation.
 
@@ -190,3 +209,21 @@ The pipeline and viewer produce several types of visualizations:
 - All intermediate and output Parquet files are stored in the `data/` directory.
 - The `data/` folder is included in `.gitignore` and is not tracked by git.
 - If you need to share or archive data, copy files from `data/` manually.
+
+## 9. Pipeline Orchestration, Utilities, and Analysis
+
+- **new_indicators_pipeline.py**: The main entry point for the entire pipeline. Orchestrates all steps from raw data cleaning, period segmentation, feature engineering, outlier flagging, and network analysis. Handles batching, checkpointing, logging, and reproducibility. Supports resuming from checkpoints and is robust for very large datasets.
+- **pipeline_utils.py**: Contains all core pipeline helper functions, including batch processing logic, memory-efficient streaming, node assignment, shortest path computation, checkpointing, and step-level profiling. Also includes the implementation of `compute_network_outlier_flag` and other step helpers.
+- **pipeline_network_analysis.py**: CLI tool for in-depth analysis and reporting of pipeline outputs. Generates Markdown summary reports, plots, and statistics for each run, and supports comparison between runs. Can be run automatically at the end of the pipeline or standalone.
+- **network_checkpoints/**: Stores intermediate checkpoint files for the network shortest path step, enabling resumable and robust computation.
+- **pipeline_stats/**: Stores per-run logs, metadata, profiling, and statistics for each pipeline execution. Each run gets a timestamped subfolder with logs, environment info, and analysis outputs.
+
+## 10. Other Files in the Repository
+
+- **geo.py / geo2.py**: Utilities for geographic filtering, bounding box, and spatial join operations to restrict data to the Beijing region.
+- **indicators.py / indicators-real-data.py**: Additional indicator computation, experiments, and real data analysis scripts.
+- **trajectory_utils.py**: Helper functions for trajectory and period filtering, metadata extraction, and visualization support.
+- **trajectory_viewer.py**: Streamlit application for interactive exploration and visualization of trajectories, periods, and outlier flags.
+- **data-exploration.py**: Ad hoc data exploration, prototyping, and quick analysis scripts.
+- **pyproject.toml**: Project dependencies, configuration for pytest, and tool settings.
+- **.env, .gitignore, .python-version, uv.lock**: Environment variable management, version control ignores, Python version pinning, and lockfile for reproducible installs.
