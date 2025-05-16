@@ -248,7 +248,6 @@ def run_network_ratio_step(periods_sld_path, run_id, stats, args, resume=False):
             num_workers=8,
             checkpoint_dir="network_checkpoints",
             run_id=run_id,
-            clean_mode=args.clean,
             resume=resume
         )
         step_info["status"] = "computed"
@@ -276,7 +275,6 @@ def run_network_ratio_step(periods_sld_path, run_id, stats, args, resume=False):
                 num_workers=8,
                 checkpoint_dir="network_checkpoints",
                 run_id=run_id,
-                clean_mode=args.clean,
                 resume=resume
             )
             step_info["status"] = "computed"

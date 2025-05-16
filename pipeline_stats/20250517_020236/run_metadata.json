@@ -9,6 +9,17 @@
       "status": "reused",
       "reused_from": "data/cleaned_points_in_beijing_20250517_004207.parquet",
       "output_path": "data/cleaned_points_in_beijing_20250517_004207.parquet"
+    },
+    "cleaned_with_period_id": {
+      "timestamp": "2025-05-17T02:05:17.959251",
+      "status": "reused",
+      "reused_from": "data/cleaned_with_period_id_in_beijing_20250516_214756.parquet",
+      "output_path": "data/cleaned_with_period_id_in_beijing_20250516_214756.parquet"
+    },
+    "periods_with_sld_ratio": {
+      "timestamp": "2025-05-17T02:05:20.382227",
+      "status": "computed",
+      "output_path": "data/periods_with_sld_ratio_20250517_020236.parquet"
     }
   },
   "args": {
