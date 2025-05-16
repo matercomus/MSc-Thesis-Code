@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils import (
     add_time_distance_calcs, add_implied_speed, add_abnormality_flags, select_final_columns, add_period_id, summarize_periods, compute_iqr_thresholds
 )
+import jsonlines
 
 def file_hash(path):
     h = hashlib.sha256()
@@ -230,7 +231,7 @@ def run_periods_with_sld_ratio(cleaned_with_period_id, periods_sld_path, periods
     return period_df
 
 @profile_step("network_ratio")
-def run_network_ratio_step(periods_sld_path, run_id, stats, args):
+def run_network_ratio_step(periods_sld_path, run_id, stats, args, resume=False):
     network_ratio_path = f"data/periods_with_network_ratio_{run_id}.parquet"
     input_paths = {"periods_sld_hash": periods_sld_path}
     reused_from = None
@@ -247,7 +248,8 @@ def run_network_ratio_step(periods_sld_path, run_id, stats, args):
             num_workers=8,
             checkpoint_dir="network_checkpoints",
             run_id=run_id,
-            clean_mode=args.clean
+            clean_mode=args.clean,
+            resume=resume
         )
         step_info["status"] = "computed"
         step_info["output_path"] = network_ratio_path
@@ -274,7 +276,8 @@ def run_network_ratio_step(periods_sld_path, run_id, stats, args):
                 num_workers=8,
                 checkpoint_dir="network_checkpoints",
                 run_id=run_id,
-                clean_mode=args.clean
+                clean_mode=args.clean,
+                resume=resume
             )
             step_info["status"] = "computed"
             step_info["output_path"] = network_ratio_path
@@ -324,235 +327,157 @@ def compute_network_shortest_paths_batched(
     periods_path,
     osm_graph_path,
     output_path,
-    batch_size=500,
+    batch_size=100,
     num_workers=8,
     checkpoint_dir="network_checkpoints",
     run_id=None,
     node_cache_batch_size=1000,
     node_cache_num_workers=4,
     output_dir="pipeline_stats",
-    clean_mode=False
+    clean_mode=False,
+    resume=False
 ):
+    import polars as pl
+    import pandas as pd
+    import numpy as np
+    import tempfile
     logger = logging.getLogger("network_shortest_path")
     os.makedirs(checkpoint_dir, exist_ok=True)
-    periods_df = pd.read_parquet(periods_path)
     G = ox.load_graphml(osm_graph_path)
     node_cache_path = os.path.join(checkpoint_dir, "point_to_node.parquet")
     node_cache_meta = node_cache_path + ".meta.json"
     periods_hash = file_hash(periods_path)
     graph_hash = file_hash(osm_graph_path)
-    # --- Node cache handling ---
-    if clean_mode:
-        logger.info("[CLEAN] Skipping node cache in clean mode")
-        cache_valid = False
-    else:
-        cache_valid = os.path.exists(node_cache_path) and os.path.exists(node_cache_meta)
-        if cache_valid:
-            with open(node_cache_meta) as f:
-                meta = json.load(f)
-            cache_valid = meta.get("periods_hash") == periods_hash and meta.get("graph_hash") == graph_hash
-    if cache_valid:
-        logger.info(f"[REUSE] Loading node cache from {node_cache_path}")
-        node_df = pd.read_parquet(node_cache_path)
-        point_to_node = {(row.lat, row.lon): row.node for row in node_df.itertuples(index=False)}
-        all_points = list(point_to_node.keys())
-    else:
-        logger.info("[COMPUTE] Building node cache from scratch")
-        all_points = list(set(
-            list(zip(periods_df['start_latitude'], periods_df['start_longitude'])) +
-            list(zip(periods_df['end_latitude'], periods_df['end_longitude']))
-        ))
-        logger.info(f"Processing {len(all_points)} unique points in {node_cache_batch_size} point batches")
-        point_to_node = {}
-        import tempfile
-        import csv
-        with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv') as tmpfile:
-            writer = csv.writer(tmpfile)
-            writer.writerow(['lat', 'lon', 'node'])
-            def process_batch(batch):
-                lats, lons = zip(*batch)
+    # --- Batch profiling setup ---
+    batch_profile_path = None
+    batch_checkpoint_path = None
+    last_completed_batch = -1
+    if run_id:
+        run_stats_dir = os.path.join(output_dir, run_id)
+        os.makedirs(run_stats_dir, exist_ok=True)
+        batch_profile_path = os.path.join(run_stats_dir, "network_batch_profile.jsonl")
+        batch_checkpoint_path = os.path.join(run_stats_dir, "last_completed_batch.txt")
+        if resume and os.path.exists(batch_checkpoint_path):
+            with open(batch_checkpoint_path) as f:
                 try:
-                    nodes = ox.nearest_nodes(G, lons, lats)
+                    last_completed_batch = int(f.read().strip())
+                    logger.info(f"[RESUME] Resuming from batch {last_completed_batch + 1}")
                 except Exception:
-                    nodes = [None] * len(batch)
-                return list(zip(batch, nodes))
-            batches = [all_points[i:i+node_cache_batch_size] for i in range(0, len(all_points), node_cache_batch_size)]
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            from tqdm import tqdm
-            with ThreadPoolExecutor(max_workers=node_cache_num_workers) as executor:
-                futures = {executor.submit(process_batch, batch): batch for batch in batches}
-                for future in tqdm(as_completed(futures), total=len(batches), desc="Node cache batches"):
-                    results = future.result()
-                    for (latlon, node) in results:
-                        lat, lon = latlon
-                        point_to_node[(lat, lon)] = node
-                        writer.writerow([lat, lon, node])
-            tmpfile_path = tmpfile.name
-        if not clean_mode:
-            node_df = pd.read_csv(tmpfile_path)
-            node_df.to_parquet(node_cache_path)
-            os.remove(tmpfile_path)
-            with open(node_cache_meta, "w") as f:
-                json.dump({"periods_hash": periods_hash, "graph_hash": graph_hash}, f)
-            logger.info(f"[SAVE] Node cache written to {node_cache_path}")
-    node_assignment_path = os.path.join(output_dir, run_id, f"node_assignment_{run_id}.parquet") if run_id else "node_assignment.parquet"
-    if not cache_valid:
-        node_df.to_parquet(node_assignment_path)
+                    last_completed_batch = -1
     else:
-        node_df.to_parquet(node_assignment_path)
-    logger.info(f"[SAVE] Node assignments saved to {node_assignment_path}")
-    total_points = len(all_points)
-    assigned_nodes = [point_to_node.get((lat, lon)) for (lat, lon) in all_points]
-    successful_assignments = sum(n is not None for n in assigned_nodes)
-    failed_assignments = total_points - successful_assignments
-    stats = {
-        "node_assignment": {
-            "total_points": total_points,
-            "successful_assignments": successful_assignments,
-            "failed_assignments": failed_assignments,
-            "success_pct": successful_assignments / total_points if total_points else None,
-            "fail_pct": failed_assignments / total_points if total_points else None,
-            "unique_nodes_used": len(set(n for n in assigned_nodes if n is not None)),
-            "cache_status": "reused" if cache_valid else "computed",
-        },
-        "path_computation": {
-            "total_pairs": 0,
-            "successful_paths": 0,
-            "failed_paths": 0,
-            "same_node_pairs": 0,
-        },
-        "distance_stats": {
-            "min": None,
-            "max": None,
-            "mean": None,
-            "median": None,
-        },
-        "ratio_stats": {
-            "min": None,
-            "max": None,
-            "mean": None,
-            "median": None,
-            "nan_count": 0,
-        }
-    }
-    periods_df['unique_key'] = periods_df['license_plate'].astype(str) + '_' + periods_df['period_id'].astype(str)
-    checkpoint_file = os.path.join(checkpoint_dir, "network_paths_checkpoint.parquet")
-    if os.path.exists(checkpoint_file):
-        done_df = pd.read_parquet(checkpoint_file)
-        done_keys = set(done_df['unique_key'])
-        logger.info(f"Loaded checkpoint with {len(done_keys)} completed periods.")
-    else:
-        done_df = pd.DataFrame()
-        done_keys = set()
-    to_process = periods_df[~periods_df['unique_key'].isin(done_keys)].copy()
-    logger.info(f"Processing {len(to_process)} new periods (skipping {len(done_keys)} already done).")
-    # --- Path computation ---
-    to_process['start_node'] = [point_to_node.get((row['start_latitude'], row['start_longitude'])) for _, row in to_process.iterrows()]
-    to_process['end_node'] = [point_to_node.get((row['end_latitude'], row['end_longitude'])) for _, row in to_process.iterrows()]
-    node_pairs = set(zip(to_process['start_node'], to_process['end_node']))
-    node_pair_to_dist = {}
-    node_pair_rows = []
-    def compute_pair(pair):
-        orig, dest = pair
-        if orig is None or dest is None:
-            return pair, float('nan')
-        if orig == dest:
-            return pair, float('nan')
+        batch_profile_path = "network_batch_profile.jsonl"
+        batch_checkpoint_path = "last_completed_batch.txt"
+        if resume and os.path.exists(batch_checkpoint_path):
+            with open(batch_checkpoint_path) as f:
+                try:
+                    last_completed_batch = int(f.read().strip())
+                    logger.info(f"[RESUME] Resuming from batch {last_completed_batch + 1}")
+                except Exception:
+                    last_completed_batch = -1
+    # --- Node cache handling ---
+    # We'll build the node cache in streaming batches as well
+    # First, collect all unique (lat, lon) pairs from the periods file in streaming batches
+    logger.info("[NODE CACHE] Building/using node cache in streaming batches...")
+    unique_points = set()
+    periods_schema = pl.read_parquet(periods_path, n_rows=1).schema
+    # Use Polars streaming to get all unique points
+    scan = pl.scan_parquet(periods_path)
+    for col in ["start_latitude", "start_longitude", "end_latitude", "end_longitude"]:
+        if col not in periods_schema:
+            raise ValueError(f"Column {col} not found in periods file!")
+    # Collect unique points in batches
+    batch_idx = 0
+    for batch in scan.select([
+        pl.col("start_latitude"), pl.col("start_longitude"),
+        pl.col("end_latitude"), pl.col("end_longitude")
+    ]).collect(streaming=True).iter_rows():
+        s_lat, s_lon, e_lat, e_lon = batch
+        unique_points.add((s_lat, s_lon))
+        unique_points.add((e_lat, e_lon))
+    unique_points = list(unique_points)
+    logger.info(f"[NODE CACHE] Found {len(unique_points)} unique points for node assignment.")
+    # Assign nodes in batches
+    point_to_node = {}
+    for i in tqdm(range(0, len(unique_points), node_cache_batch_size), desc="Node assignment batches"):
+        batch_points = unique_points[i:i+node_cache_batch_size]
+        lats, lons = zip(*batch_points)
         try:
-            dist = nx.shortest_path_length(G, orig, dest, weight='length') / 1000
-            return pair, dist
+            nodes = ox.nearest_nodes(G, lons, lats)
         except Exception:
-            return pair, float('nan')
-    node_pairs = list(node_pairs)
-    batch_size_pairs = 1000
-    import tempfile
+            nodes = [None] * len(batch_points)
+        for (lat, lon), node in zip(batch_points, nodes):
+            point_to_node[(lat, lon)] = node
+    logger.info(f"[NODE CACHE] Node assignment complete.")
+    # --- Streaming batch processing of periods ---
+    scan = pl.scan_parquet(periods_path)
+    n_rows = scan.select([pl.count()]).collect().item()
+    n_batches = (n_rows + batch_size - 1) // batch_size
+    logger.info(f"[BATCH] Will process {n_rows} periods in {n_batches} batches of size {batch_size}.")
     batch_files = []
-    for i in tqdm(range(0, len(node_pairs), batch_size_pairs), desc="Node pair batches"):
-        batch_pairs = node_pairs[i:i+batch_size_pairs]
-        node_pair_rows = []
-        with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            futures = {executor.submit(compute_pair, pair): pair for pair in batch_pairs}
-            for future in tqdm(as_completed(futures), total=len(batch_pairs), desc=f"Batch {i//batch_size_pairs+1}", leave=False):
-                pair, dist = future.result()
-                if pair[0] is not None and pair[1] is not None:
-                    node_pair_rows.append({"start_node": pair[0], "end_node": pair[1], "distance_km": dist})
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.parquet')
-        pd.DataFrame(node_pair_rows).to_parquet(tmp.name)
-        batch_files.append(tmp.name)
-        tmp.close()
-    node_pairs_path = os.path.join(output_dir, run_id, f"node_pairs_{run_id}.parquet") if run_id else "node_pairs.parquet"
-    all_node_pairs_df = pd.concat([pd.read_parquet(f) for f in batch_files], ignore_index=True)
-    all_node_pairs_df.to_parquet(node_pairs_path)
-    for f in batch_files:
-        os.remove(f)
-    node_pair_to_dist = {(row['start_node'], row['end_node']): row['distance_km'] for _, row in all_node_pairs_df.iterrows()}
-    # --- Assign distances to periods in batches ---
-    all_results_files = []
-    all_distances = []
-    all_ratios = []
-    for i in tqdm(range(0, len(to_process), batch_size), desc="Batches"):
-        batch = to_process.iloc[i:i+batch_size].copy()
-        def get_dist(row):
-            if row['start_node'] is None or row['end_node'] is None:
+    for batch_idx in tqdm(range(n_batches), desc="Period batches"):
+        if resume and batch_idx <= last_completed_batch:
+            logger.info(f"[RESUME] Skipping batch {batch_idx} (already completed)")
+            continue
+        batch_start_time = time.perf_counter()
+        process = psutil.Process(os.getpid())
+        mem_before = process.memory_info().rss / 1024**2  # MB
+        logger.info(f"[BATCH] Starting batch {batch_idx+1}/{n_batches}")
+        batch = scan.slice(batch_idx * batch_size, batch_size).collect(streaming=True).to_pandas()
+        # Assign nodes
+        batch['start_node'] = [point_to_node.get((row['start_latitude'], row['start_longitude'])) for _, row in batch.iterrows()]
+        batch['end_node'] = [point_to_node.get((row['end_latitude'], row['end_longitude'])) for _, row in batch.iterrows()]
+        # Compute shortest paths for all pairs in this batch
+        def compute_pair(row):
+            orig, dest = row['start_node'], row['end_node']
+            if orig is None or dest is None:
                 return float('nan')
-            return node_pair_to_dist.get((row['start_node'], row['end_node']), float('nan'))
-        batch['network_shortest_distance'] = batch.apply(get_dist, axis=1)
+            if orig == dest:
+                return float('nan')
+            try:
+                dist = nx.shortest_path_length(G, orig, dest, weight='length') / 1000
+                return dist
+            except Exception:
+                return float('nan')
+        batch['network_shortest_distance'] = batch.apply(compute_pair, axis=1)
         batch['route_deviation_ratio'] = batch.apply(
             lambda row: row['sum_distance'] / row['network_shortest_distance']
             if not pd.isna(row['network_shortest_distance']) and row['network_shortest_distance'] > 0
             else float('nan'),
             axis=1
         )
+        # Write batch to temp parquet
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.parquet')
         batch.to_parquet(tmp.name)
-        all_results_files.append(tmp.name)
+        batch_files.append(tmp.name)
         tmp.close()
-        valid_distances = batch['network_shortest_distance'].dropna()
-        valid_ratios = batch['route_deviation_ratio'].replace([np.inf, -np.inf], np.nan).dropna()
-        all_distances.extend(valid_distances)
-        all_ratios.extend(valid_ratios)
-        stats["ratio_stats"]["nan_count"] += batch['route_deviation_ratio'].isna().sum()
-        if os.path.exists(checkpoint_file):
-            prev = pd.read_parquet(checkpoint_file)
-            pd.concat([prev, batch]).drop_duplicates('unique_key').to_parquet(checkpoint_file)
-        else:
-            batch.to_parquet(checkpoint_file)
-        logger.info(f"Checkpointed batch {i//batch_size+1} ({len(batch)} periods).")
-    final_df = pd.concat([pd.read_parquet(f) for f in all_results_files], ignore_index=True)
-    for f in all_results_files:
+        mem_after = process.memory_info().rss / 1024**2  # MB
+        batch_end_time = time.perf_counter()
+        elapsed = batch_end_time - batch_start_time
+        logger.info(f"[BATCH] Finished batch {batch_idx+1}/{n_batches} | Time: {elapsed:.2f}s | Mem: {mem_before:.2f}MB -> {mem_after:.2f}MB | Rows: {len(batch)}")
+        # Profiling
+        batch_profile = {
+            "batch_index": batch_idx,
+            "start_row": batch_idx * batch_size,
+            "end_row": batch_idx * batch_size + len(batch),
+            "n_periods": len(batch),
+            "time_sec": elapsed,
+            "mem_before_mb": mem_before,
+            "mem_after_mb": mem_after,
+            "delta_mb": mem_after - mem_before,
+            "timestamp": datetime.now().isoformat(),
+        }
+        with open(batch_profile_path, "a") as f:
+            f.write(json.dumps(batch_profile) + "\n")
+        with open(batch_checkpoint_path, "w") as f:
+            f.write(str(batch_idx))
+    # Merge all batch files into final output (streaming)
+    logger.info(f"[MERGE] Merging {len(batch_files)} batch files into {output_path}")
+    final_df = pl.concat([pl.read_parquet(f) for f in batch_files], rechunk=True)
+    final_df.write_parquet(output_path)
+    for f in batch_files:
         os.remove(f)
-    # --- FILTER OUT FAILED/DEGENERATE PERIODS ---
-    n_before_failed_filter = len(final_df)
-    failed_mask = final_df['network_shortest_distance'].isna() | (final_df['network_shortest_distance'] < 1.0)
-    n_failed_periods = failed_mask.sum()
-    if n_failed_periods > 0:
-        logger.info(f"Filtering out {n_failed_periods} periods with failed or degenerate network path computation (NaN or <1km).")
-    final_df = final_df[~failed_mask].copy()
-    n_final = len(final_df)
-    stats["filtered_failed_periods"] = int(n_failed_periods)
-    stats["final_periods"] = int(n_final)
-    if not final_df.empty:
-        stats["distance_stats"].update({
-            "min": float(final_df['network_shortest_distance'].min()),
-            "max": float(final_df['network_shortest_distance'].max()),
-            "mean": float(final_df['network_shortest_distance'].mean()),
-            "median": float(final_df['network_shortest_distance'].median()),
-        })
-        stats["ratio_stats"].update({
-            "min": float(final_df['route_deviation_ratio'].min()),
-            "max": float(final_df['route_deviation_ratio'].max()),
-            "mean": float(final_df['route_deviation_ratio'].mean()),
-            "median": float(final_df['route_deviation_ratio'].median()),
-        })
-    if run_id is not None:
-        save_step_stats("network_shortest_paths", stats, run_id, output_dir=output_dir)
-    else:
-        save_step_stats("network_shortest_paths", stats, "default", output_dir=output_dir)
-    node_pairs_path = os.path.join(output_dir, run_id, f"node_pairs_{run_id}.parquet") if run_id else "node_pairs.parquet"
-    all_node_pairs_df.to_parquet(node_pairs_path)
-    final_df.to_parquet(output_path)
-    logger.info(f"Saved final results to {output_path}")
-    return final_df
+    logger.info(f"[DONE] All batches processed and merged. Output written to {output_path}")
+    return final_df.to_pandas()
 
 def clean_pipeline_outputs():
     import os
@@ -594,4 +519,39 @@ def find_latest_output(pattern):
         return m.group(1) if m else ''
     files = [(f, extract_runid(f)) for f in files]
     files = sorted(files, key=lambda x: x[1], reverse=True)
-    return files[0][0] if files else None 
+    return files[0][0] if files else None
+
+def compute_network_outlier_flag(input_path, output_path, run_id):
+    import pandas as pd
+    import numpy as np
+    import os
+    import json
+
+    df = pd.read_parquet(input_path)
+    # Only consider valid ratios
+    valid = df["route_deviation_ratio"].replace([np.inf, -np.inf], np.nan).dropna()
+    q1 = valid.quantile(0.25)
+    q3 = valid.quantile(0.75)
+    iqr = q3 - q1
+    threshold = q3 + 1.5 * iqr
+    df["is_network_outlier"] = df["route_deviation_ratio"] > threshold
+    df.to_parquet(output_path)
+
+    # Optionally save stats for reproducibility
+    stats = {
+        "input_shape": list(df.shape),
+        "valid_ratios": int(valid.shape[0]),
+        "outliers": int(df["is_network_outlier"].sum()),
+        "quantiles": {
+            "q1": float(q1),
+            "q3": float(q3),
+            "iqr": float(iqr),
+            "threshold": float(threshold),
+        }
+    }
+    stats_dir = os.path.join("pipeline_stats", run_id)
+    os.makedirs(stats_dir, exist_ok=True)
+    stats_path = os.path.join(stats_dir, f"network_outlier_flag_stats_{run_id}.json")
+    with open(stats_path, "w") as f:
+        json.dump(stats, f, indent=2)
+    return df 

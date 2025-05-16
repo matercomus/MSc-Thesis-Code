@@ -1,0 +1,4 @@
+2025-05-17 00:38:59,511 INFO Random seed set to 42
+2025-05-17 00:39:00,094 INFO Saved pip freeze to pipeline_stats/20250517_003858/environment.txt
+2025-05-17 00:39:00,094 INFO [COMPUTE] Computing cleaned_points from scratch
+2025-05-17 00:39:01,444 INFO Using gap_threshold_sec=105.00, speed_threshold_kph=146.81 for abnormality flags

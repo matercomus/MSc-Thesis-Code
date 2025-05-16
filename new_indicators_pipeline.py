@@ -82,6 +82,7 @@ def main():
     parser.add_argument("--run-analysis", action="store_true", help="Automatically run the analysis tool after pipeline completes.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
     parser.add_argument("--reuse-latest", action="store_true", help="Try to reuse latest available outputs for each step.")
+    parser.add_argument("--resume", action="store_true", help="Resume from last completed batch if possible (network_ratio step only)")
     args = parser.parse_args()
     if args.clean and args.clean_step:
         parser.error("--clean and --clean-step cannot be used together.")
@@ -104,6 +105,9 @@ def main():
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_stats_dir = os.path.join("pipeline_stats", run_id)
     os.makedirs(run_stats_dir, exist_ok=True)
+    # --- Write LAST_RUN_ID file early for crash-resistance ---
+    with open(os.path.join("pipeline_stats", "LAST_RUN_ID"), "w") as f:
+        f.write(run_id)
     # --- Initialize pipeline stats ---
     stats = PipelineStats(run_id, output_dir="pipeline_stats")
     # --- Set up per-run logging ---
@@ -208,6 +212,9 @@ def main():
     save_metadata()
     if cleaned_df is not None:
         stats.record_step_stats("cleaned_points", cleaned_df)
+    # Update LAST_RUN_ID after step (extra robustness)
+    with open(os.path.join("pipeline_stats", "LAST_RUN_ID"), "w") as f:
+        f.write(run_id)
 
     # --- Step 2: Cleaned with period_id ---
     step_name = "cleaned_with_period_id"
@@ -246,6 +253,9 @@ def main():
 
     run_metadata["steps"][step_name] = step_info
     save_metadata()
+    # Update LAST_RUN_ID after step (extra robustness)
+    with open(os.path.join("pipeline_stats", "LAST_RUN_ID"), "w") as f:
+        f.write(run_id)
 
     # --- Step 3: Period summary with SLD ratio ---
     step_name = "periods_with_sld_ratio"
@@ -283,17 +293,27 @@ def main():
 
     run_metadata["steps"][step_name] = step_info
     save_metadata()
+    # Update LAST_RUN_ID after step (extra robustness)
+    with open(os.path.join("pipeline_stats", "LAST_RUN_ID"), "w") as f:
+        f.write(run_id)
 
     # --- Step 4: Network ratio ---
-    network_ratio_df, network_ratio_step_info = run_network_ratio_step(periods_sld_path, run_id, stats, args)
+    resume_batches = args.resume or args.reuse_latest
+    network_ratio_df, network_ratio_step_info = run_network_ratio_step(periods_sld_path, run_id, stats, args, resume=resume_batches)
     run_metadata["steps"]["network_ratio"] = network_ratio_step_info
     save_metadata()
+    # Update LAST_RUN_ID after step (extra robustness)
+    with open(os.path.join("pipeline_stats", "LAST_RUN_ID"), "w") as f:
+        f.write(run_id)
 
     # --- Step 5: Network outlier flag ---
     network_ratio_path = network_ratio_step_info["output_path"]
     final_df, network_outlier_flag_step_info = run_network_outlier_flag_step(network_ratio_path, run_id, stats, args)
     run_metadata["steps"]["network_outlier_flag"] = network_outlier_flag_step_info
     save_metadata()
+    # Update LAST_RUN_ID after step (extra robustness)
+    with open(os.path.join("pipeline_stats", "LAST_RUN_ID"), "w") as f:
+        f.write(run_id)
 
     # --- Write LAST_RUN_ID file ---
     with open(os.path.join("pipeline_stats", "LAST_RUN_ID"), "w") as f:
