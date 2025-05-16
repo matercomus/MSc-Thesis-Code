@@ -181,6 +181,7 @@ def compute_network_shortest_paths_batched(
         logger.info(f"[REUSE] Loading node cache from {node_cache_path}")
         node_df = pd.read_parquet(node_cache_path)
         point_to_node = {(row.lat, row.lon): row.node for row in node_df.itertuples(index=False)}
+        all_points = list(point_to_node.keys())
     else:
         logger.info("[COMPUTE] Building node cache from scratch")
         # Get unique points
