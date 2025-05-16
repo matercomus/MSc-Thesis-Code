@@ -1,0 +1,17 @@
+2025-05-16 13:41:21,820 INFO Random seed set to 42
+2025-05-16 13:41:23,252 INFO Saved pip freeze to pipeline_stats/20250516_134120/environment.txt
+2025-05-16 13:41:24,410 INFO [REUSE] Using data/cleaned_points_in_beijing_20250516_122512.parquet for cleaned points step.
+2025-05-16 13:41:26,008 INFO data/cleaned_points_in_beijing_20250516_122512.parquet is up-to-date. Skipping computation.
+2025-05-16 13:41:27,617 INFO [REUSE] Using data/cleaned_with_period_id_in_beijing_20250516_122512.parquet for cleaned_with_period_id step.
+2025-05-16 13:41:27,980 INFO data/cleaned_with_period_id_in_beijing_20250516_122512.parquet is up-to-date. Skipping computation.
+2025-05-16 13:41:29,556 INFO [REUSE] Using data/periods_with_sld_ratio_20250516_122512.parquet for periods_with_sld_ratio step.
+2025-05-16 13:41:29,916 INFO data/periods_with_sld_ratio_20250516_122512.parquet is up-to-date. Skipping computation.
+2025-05-16 13:41:29,949 INFO [REUSE] OSM graph is up-to-date: beijing_drive.graphml
+2025-05-16 13:42:34,001 INFO Loading persistent node cache from network_checkpoints/point_to_node.parquet
+2025-05-16 13:42:34,484 INFO Loaded checkpoint with 31603 completed periods.
+2025-05-16 13:42:34,519 INFO Processing 0 new periods (skipping 31603 already done).
+2025-05-16 13:42:34,568 INFO Computing shortest paths for 0 unique node pairs...
+2025-05-16 13:42:34,573 INFO Saved network_shortest_paths statistics to pipeline_stats/20250516_134120/network_shortest_paths_stats_20250516_134234.json
+2025-05-16 13:42:34,738 INFO Saved final results to data/periods_with_network_ratio_20250516_134120.parquet
+2025-05-16 13:42:34,783 INFO [REUSE] Using data/periods_with_network_ratio_flagged_20250516_122512.parquet for network_ratio_flagged step.
+2025-05-16 13:42:34,931 INFO Pipeline completed: all parquet files written.

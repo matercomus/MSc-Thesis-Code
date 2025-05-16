@@ -6,6 +6,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 import json
+import logging
+from pathlib import Path
 
 
 def get_analysis_dir():
@@ -132,7 +134,34 @@ def main():
     args = parser.parse_args()
 
     G = ox.load_graphml(args.graph)
-    periods = pd.read_parquet(args.periods)
+
+    # --- Robust fallback for reused periods file ---
+    periods_path = args.periods
+    if not os.path.exists(periods_path):
+        # Try to find the actual file from run_metadata.json
+        # Assume periods_path is like data/periods_with_network_ratio_flagged_{run_id}.parquet
+        # Extract run_id
+        import re
+        m = re.search(r'_(\d{8}_\d{6})', periods_path)
+        run_id = m.group(1) if m else None
+        if run_id:
+            meta_path = Path(f'pipeline_stats/{run_id}/run_metadata.json')
+            if meta_path.exists():
+                with open(meta_path) as f:
+                    meta = json.load(f)
+                step = meta.get('steps', {}).get('network_outlier_flag', {})
+                actual_path = step.get('output_path')
+                if actual_path and os.path.exists(actual_path):
+                    print(f"[INFO] Input file {periods_path} not found, using reused output {actual_path} from run_metadata.json.")
+                    periods_path = actual_path
+                else:
+                    raise FileNotFoundError(f"Could not find fallback output_path in {meta_path}")
+            else:
+                raise FileNotFoundError(f"run_metadata.json not found for run_id {run_id}")
+        else:
+            raise FileNotFoundError(f"Input file {periods_path} not found and could not extract run_id.")
+    periods = pd.read_parquet(periods_path)
+
     analysis_dir = get_analysis_dir()
 
     if args.all or args.info:

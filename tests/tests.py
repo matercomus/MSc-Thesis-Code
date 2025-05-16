@@ -1106,3 +1106,16 @@ def test_network_distance_validation(tmp_path, monkeypatch):
     assert len(ratios) > 0
     assert all(ratios > 0)  # All ratios should be positive
     assert all(ratios < 10)  # Ratios shouldn't be unreasonably large
+
+def test_polars_null_count_scalar():
+    import polars as pl
+    import numpy as np
+    # Create a DataFrame with some nulls
+    df = pl.DataFrame({
+        "a": [1, None, 3],
+        "b": [None, 2, 3],
+    })
+    # This should return 2 (one null in each column)
+    nulls = df.null_count().to_numpy().sum()
+    assert isinstance(nulls, (int, np.integer))
+    assert nulls == 2

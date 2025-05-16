@@ -1,0 +1,154 @@
+2025-05-16 14:26:54,666 INFO Random seed set to 42
+2025-05-16 14:26:55,381 INFO Saved pip freeze to pipeline_stats/20250516_142654/environment.txt
+2025-05-16 14:26:55,381 INFO Loading filtered_points_in_beijing.parquet...
+2025-05-16 14:26:55,382 INFO Computing IQR-based thresholds for time gaps and speeds...
+2025-05-16 14:26:57,073 INFO Thresholds: time_gap=105.00 sec, speed=146.81 kph
+2025-05-16 14:26:57,073 INFO Computing time, distance, speed, and abnormality flags...
+2025-05-16 14:26:57,074 INFO Collecting base DataFrame (this may take a while)...
+2025-05-16 14:27:01,970 INFO Base DataFrame shape: (12667620, 12)
+2025-05-16 14:27:01,970 INFO Detecting trajectory outliers (Isolation Forest, parallel, reproducible)...
+2025-05-16 14:28:42,864 INFO Filtering out taxis with any temporal gap or position jump...
+2025-05-16 14:28:43,111 INFO Cleaned DataFrame shape: (5378468, 11)
+2025-05-16 14:28:43,111 WARNING Cleaned DataFrame contains nulls.
+2025-05-16 14:28:44,800 INFO Saved Cleaned points to data/cleaned_points_in_beijing_20250516_142654.parquet (shape: (5378468, 11))
+2025-05-16 14:28:45,396 INFO Adding period_id and summarizing periods...
+2025-05-16 14:28:45,691 INFO Period summary shape: (31861, 16)
+2025-05-16 14:28:45,691 INFO Attaching period_id to cleaned points...
+2025-05-16 14:28:46,436 INFO Cleaned with period_id shape: (5377051, 14)
+2025-05-16 14:28:48,123 INFO Saved Cleaned points with period_id to data/cleaned_with_period_id_in_beijing_20250516_142654.parquet (shape: (5377051, 14))
+2025-05-16 14:28:48,298 INFO Computing per-period outlier counts...
+2025-05-16 14:28:50,468 INFO Flagging SLD-based outliers...
+2025-05-16 14:28:50,983 INFO Saved Period summary with SLD ratio and outlier flags to data/periods_with_sld_ratio_20250516_142654.parquet (shape: (31603, 20))
+2025-05-16 14:28:52,815 INFO [REUSE] OSM graph is up-to-date: beijing_drive.graphml
+2025-05-16 14:29:28,297 INFO Caching nearest OSM nodes for 53285 unique points (batched, parallel)...
+2025-05-16 14:29:35,296 INFO Saved persistent node cache to network_checkpoints/point_to_node.parquet
+2025-05-16 14:29:35,398 INFO Processing 31603 new periods (skipping 0 already done).
+2025-05-16 14:29:37,848 INFO Computing shortest paths for 25873 unique node pairs...
+2025-05-16 14:29:50,901 WARNING Failed to compute shortest path for (9819460681, 1412740563): Node 1412740563 not reachable from 9819460681
+2025-05-16 14:29:52,912 WARNING Failed to compute shortest path for (331145793, 1597402911): Node 1597402911 not reachable from 331145793
+2025-05-16 14:29:55,685 WARNING Failed to compute shortest path for (8005884692, 12011908570): Node 12011908570 not reachable from 8005884692
+2025-05-16 14:30:08,102 WARNING Failed to compute shortest path for (9913910307, 9722533046): Node 9722533046 not reachable from 9913910307
+2025-05-16 14:30:36,049 WARNING Failed to compute shortest path for (1734287114, 9913910298): Node 9913910298 not reachable from 1734287114
+2025-05-16 14:30:37,809 WARNING Failed to compute shortest path for (9079076033, 1460425642): Node 1460425642 not reachable from 9079076033
+2025-05-16 14:30:37,965 WARNING Failed to compute shortest path for (4716729762, 656069684): Node 656069684 not reachable from 4716729762
+2025-05-16 14:30:45,621 WARNING Failed to compute shortest path for (2465480264, 5622901819): Node 5622901819 not reachable from 2465480264
+2025-05-16 14:31:01,988 WARNING Failed to compute shortest path for (2199270052, 9913910298): Node 9913910298 not reachable from 2199270052
+2025-05-16 14:31:10,409 WARNING Failed to compute shortest path for (1349115345, 4966029189): Node 4966029189 not reachable from 1349115345
+2025-05-16 14:31:22,188 WARNING Failed to compute shortest path for (296298425, 1634360685): Node 1634360685 not reachable from 296298425
+2025-05-16 14:31:26,442 WARNING Failed to compute shortest path for (10771669781, 9913910298): Node 9913910298 not reachable from 10771669781
+2025-05-16 14:31:31,036 WARNING Failed to compute shortest path for (10924064630, 9913910298): Node 9913910298 not reachable from 10924064630
+2025-05-16 14:31:40,531 WARNING Failed to compute shortest path for (1360093875, 1351023857): Node 1351023857 not reachable from 1360093875
+2025-05-16 14:31:43,394 WARNING Failed to compute shortest path for (1819087313, 606803120): Node 606803120 not reachable from 1819087313
+2025-05-16 14:32:03,023 WARNING Failed to compute shortest path for (6122630135, 2490851825): Node 2490851825 not reachable from 6122630135
+2025-05-16 14:32:03,957 WARNING Failed to compute shortest path for (8190434497, 9913910298): Node 9913910298 not reachable from 8190434497
+2025-05-16 14:32:14,447 WARNING Failed to compute shortest path for (726657615, 5622901819): Node 5622901819 not reachable from 726657615
+2025-05-16 14:32:25,626 WARNING Failed to compute shortest path for (5838289410, 9913910298): Node 9913910298 not reachable from 5838289410
+2025-05-16 14:32:28,135 WARNING Failed to compute shortest path for (4898499156, 7202362928): Node 7202362928 not reachable from 4898499156
+2025-05-16 14:32:35,894 WARNING Failed to compute shortest path for (1549077224, 9162437055): Node 9162437055 not reachable from 1549077224
+2025-05-16 14:32:47,924 WARNING Failed to compute shortest path for (975801331, 7030909280): Node 7030909280 not reachable from 975801331
+2025-05-16 14:33:06,484 WARNING Failed to compute shortest path for (734045332, 9751994495): Node 9751994495 not reachable from 734045332
+2025-05-16 14:33:14,805 WARNING Failed to compute shortest path for (4716729762, 4137631319): Node 4137631319 not reachable from 4716729762
+2025-05-16 14:33:15,000 WARNING Failed to compute shortest path for (4716729763, 1375581678): Node 1375581678 not reachable from 4716729763
+2025-05-16 14:33:23,593 WARNING Failed to compute shortest path for (10716426743, 10867710826): Node 10867710826 not reachable from 10716426743
+2025-05-16 14:33:45,584 WARNING Failed to compute shortest path for (2115201444, 5622901819): Node 5622901819 not reachable from 2115201444
+2025-05-16 14:33:49,442 WARNING Failed to compute shortest path for (11112105609, 2592602560): Node 2592602560 not reachable from 11112105609
+2025-05-16 14:33:53,615 WARNING Failed to compute shortest path for (1808258801, 5622901819): Node 5622901819 not reachable from 1808258801
+2025-05-16 14:34:01,781 WARNING Failed to compute shortest path for (1667652100, 12406685302): Node 12406685302 not reachable from 1667652100
+2025-05-16 14:34:05,172 WARNING Failed to compute shortest path for (1317216461, 3731047481): Node 3731047481 not reachable from 1317216461
+2025-05-16 14:34:07,102 WARNING Failed to compute shortest path for (8282893762, 9913910298): Node 9913910298 not reachable from 8282893762
+2025-05-16 14:34:38,165 WARNING Failed to compute shortest path for (11100988363, 9913910298): Node 9913910298 not reachable from 11100988363
+2025-05-16 14:35:04,050 WARNING Failed to compute shortest path for (2101011258, 3731047481): Node 3731047481 not reachable from 2101011258
+2025-05-16 14:37:00,212 WARNING Failed to compute shortest path for (9136834243, 1765018144): Node 1765018144 not reachable from 9136834243
+2025-05-16 14:37:06,448 WARNING Failed to compute shortest path for (9913910307, 10911073075): Node 10911073075 not reachable from 9913910307
+2025-05-16 14:37:09,712 WARNING Failed to compute shortest path for (5715300430, 9913910298): Node 9913910298 not reachable from 5715300430
+2025-05-16 14:37:11,106 WARNING Failed to compute shortest path for (1360093875, 4718110487): Node 4718110487 not reachable from 1360093875
+2025-05-16 14:37:40,472 WARNING Failed to compute shortest path for (1667135988, 11206734600): Node 11206734600 not reachable from 1667135988
+2025-05-16 14:38:02,713 WARNING Failed to compute shortest path for (6478149502, 5622901819): Node 5622901819 not reachable from 6478149502
+2025-05-16 14:38:14,164 WARNING Failed to compute shortest path for (4716729762, 8899604463): Node 8899604463 not reachable from 4716729762
+2025-05-16 14:38:16,268 WARNING Failed to compute shortest path for (9913910307, 5826969477): Node 5826969477 not reachable from 9913910307
+2025-05-16 14:38:43,113 WARNING Failed to compute shortest path for (321760756, 11880252578): Node 11880252578 not reachable from 321760756
+2025-05-16 14:38:51,272 WARNING Failed to compute shortest path for (2327703055, 7106131574): Node 7106131574 not reachable from 2327703055
+2025-05-16 14:39:01,880 WARNING Failed to compute shortest path for (2122594986, 3731047481): Node 3731047481 not reachable from 2122594986
+2025-05-16 14:39:09,127 WARNING Failed to compute shortest path for (608739005, 5622901819): Node 5622901819 not reachable from 608739005
+2025-05-16 14:39:12,195 WARNING Failed to compute shortest path for (11880252580, 11880252579): Node 11880252579 not reachable from 11880252580
+2025-05-16 14:39:19,556 WARNING Failed to compute shortest path for (1350327467, 3016153365): Node 3016153365 not reachable from 1350327467
+2025-05-16 14:39:33,143 WARNING Failed to compute shortest path for (7840263631, 11880252578): Node 11880252578 not reachable from 7840263631
+2025-05-16 14:39:35,178 WARNING Failed to compute shortest path for (2207731637, 5622901819): Node 5622901819 not reachable from 2207731637
+2025-05-16 14:40:07,821 WARNING Failed to compute shortest path for (321794664, 11880252578): Node 11880252578 not reachable from 321794664
+2025-05-16 14:40:08,786 WARNING Failed to compute shortest path for (4716729762, 528980606): Node 528980606 not reachable from 4716729762
+2025-05-16 14:40:13,058 WARNING Failed to compute shortest path for (10000921331, 8900107268): Node 8900107268 not reachable from 10000921331
+2025-05-16 14:40:17,680 WARNING Failed to compute shortest path for (10000921331, 8278912568): Node 8278912568 not reachable from 10000921331
+2025-05-16 14:40:26,082 WARNING Failed to compute shortest path for (1772777225, 1719003215): Node 1719003215 not reachable from 1772777225
+2025-05-16 14:40:41,058 WARNING Failed to compute shortest path for (4716729762, 6375403711): Node 6375403711 not reachable from 4716729762
+2025-05-16 14:40:50,494 WARNING Failed to compute shortest path for (12011908569, 11434514129): Node 11434514129 not reachable from 12011908569
+2025-05-16 14:40:52,981 WARNING Failed to compute shortest path for (7110874207, 2037967965): Node 2037967965 not reachable from 7110874207
+2025-05-16 14:40:57,006 INFO Checkpointed batch 1 (500 periods).
+2025-05-16 14:40:57,208 INFO Checkpointed batch 2 (500 periods).
+2025-05-16 14:40:57,393 INFO Checkpointed batch 3 (500 periods).
+2025-05-16 14:40:57,598 INFO Checkpointed batch 4 (500 periods).
+2025-05-16 14:40:57,806 INFO Checkpointed batch 5 (500 periods).
+2025-05-16 14:40:58,009 INFO Checkpointed batch 6 (500 periods).
+2025-05-16 14:40:58,223 INFO Checkpointed batch 7 (500 periods).
+2025-05-16 14:40:58,441 INFO Checkpointed batch 8 (500 periods).
+2025-05-16 14:40:58,669 INFO Checkpointed batch 9 (500 periods).
+2025-05-16 14:40:58,895 INFO Checkpointed batch 10 (500 periods).
+2025-05-16 14:40:59,123 INFO Checkpointed batch 11 (500 periods).
+2025-05-16 14:40:59,344 INFO Checkpointed batch 12 (500 periods).
+2025-05-16 14:40:59,555 INFO Checkpointed batch 13 (500 periods).
+2025-05-16 14:40:59,870 INFO Checkpointed batch 14 (500 periods).
+2025-05-16 14:41:00,116 INFO Checkpointed batch 15 (500 periods).
+2025-05-16 14:41:00,373 INFO Checkpointed batch 16 (500 periods).
+2025-05-16 14:41:00,605 INFO Checkpointed batch 17 (500 periods).
+2025-05-16 14:41:00,829 INFO Checkpointed batch 18 (500 periods).
+2025-05-16 14:41:01,059 INFO Checkpointed batch 19 (500 periods).
+2025-05-16 14:41:01,304 INFO Checkpointed batch 20 (500 periods).
+2025-05-16 14:41:01,545 INFO Checkpointed batch 21 (500 periods).
+2025-05-16 14:41:01,763 INFO Checkpointed batch 22 (500 periods).
+2025-05-16 14:41:01,987 INFO Checkpointed batch 23 (500 periods).
+2025-05-16 14:41:02,235 INFO Checkpointed batch 24 (500 periods).
+2025-05-16 14:41:02,472 INFO Checkpointed batch 25 (500 periods).
+2025-05-16 14:41:02,723 INFO Checkpointed batch 26 (500 periods).
+2025-05-16 14:41:02,964 INFO Checkpointed batch 27 (500 periods).
+2025-05-16 14:41:03,275 INFO Checkpointed batch 28 (500 periods).
+2025-05-16 14:41:03,637 INFO Checkpointed batch 29 (500 periods).
+2025-05-16 14:41:04,010 INFO Checkpointed batch 30 (500 periods).
+2025-05-16 14:41:04,296 INFO Checkpointed batch 31 (500 periods).
+2025-05-16 14:41:04,568 INFO Checkpointed batch 32 (500 periods).
+2025-05-16 14:41:04,829 INFO Checkpointed batch 33 (500 periods).
+2025-05-16 14:41:05,085 INFO Checkpointed batch 34 (500 periods).
+2025-05-16 14:41:05,349 INFO Checkpointed batch 35 (500 periods).
+2025-05-16 14:41:05,605 INFO Checkpointed batch 36 (500 periods).
+2025-05-16 14:41:05,854 INFO Checkpointed batch 37 (500 periods).
+2025-05-16 14:41:06,100 INFO Checkpointed batch 38 (500 periods).
+2025-05-16 14:41:06,346 INFO Checkpointed batch 39 (500 periods).
+2025-05-16 14:41:06,596 INFO Checkpointed batch 40 (500 periods).
+2025-05-16 14:41:06,846 INFO Checkpointed batch 41 (500 periods).
+2025-05-16 14:41:07,093 INFO Checkpointed batch 42 (500 periods).
+2025-05-16 14:41:07,346 INFO Checkpointed batch 43 (500 periods).
+2025-05-16 14:41:07,608 INFO Checkpointed batch 44 (500 periods).
+2025-05-16 14:41:07,867 INFO Checkpointed batch 45 (500 periods).
+2025-05-16 14:41:08,100 INFO Checkpointed batch 46 (500 periods).
+2025-05-16 14:41:08,342 INFO Checkpointed batch 47 (500 periods).
+2025-05-16 14:41:08,594 INFO Checkpointed batch 48 (500 periods).
+2025-05-16 14:41:08,863 INFO Checkpointed batch 49 (500 periods).
+2025-05-16 14:41:09,206 INFO Checkpointed batch 50 (500 periods).
+2025-05-16 14:41:09,456 INFO Checkpointed batch 51 (500 periods).
+2025-05-16 14:41:09,699 INFO Checkpointed batch 52 (500 periods).
+2025-05-16 14:41:09,953 INFO Checkpointed batch 53 (500 periods).
+2025-05-16 14:41:10,215 INFO Checkpointed batch 54 (500 periods).
+2025-05-16 14:41:10,467 INFO Checkpointed batch 55 (500 periods).
+2025-05-16 14:41:10,712 INFO Checkpointed batch 56 (500 periods).
+2025-05-16 14:41:10,955 INFO Checkpointed batch 57 (500 periods).
+2025-05-16 14:41:11,217 INFO Checkpointed batch 58 (500 periods).
+2025-05-16 14:41:11,457 INFO Checkpointed batch 59 (500 periods).
+2025-05-16 14:41:11,716 INFO Checkpointed batch 60 (500 periods).
+2025-05-16 14:41:11,976 INFO Checkpointed batch 61 (500 periods).
+2025-05-16 14:41:12,234 INFO Checkpointed batch 62 (500 periods).
+2025-05-16 14:41:12,507 INFO Checkpointed batch 63 (500 periods).
+2025-05-16 14:41:12,737 INFO Checkpointed batch 64 (103 periods).
+2025-05-16 14:41:12,791 INFO Saved network_shortest_paths statistics to pipeline_stats/20250516_142654/network_shortest_paths_stats_20250516_144112.json
+2025-05-16 14:41:12,877 INFO Saved final results to data/periods_with_network_ratio_20250516_142654.parquet
+2025-05-16 14:41:13,061 INFO Network ratio outlier threshold: 88.88 (Q1=0.75, Q3=36.00, IQR=35.25)
+2025-05-16 14:41:13,062 INFO Found 6696 network outliers out of 31545 valid ratios
+2025-05-16 14:41:13,062 INFO Saved network_outlier_flag statistics to pipeline_stats/20250516_142654/network_outlier_flag_stats_20250516_144113.json
+2025-05-16 14:41:13,166 INFO Pipeline completed: all parquet files written.

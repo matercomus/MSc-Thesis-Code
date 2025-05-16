@@ -1,0 +1,31 @@
+{
+  "total_periods": 31603,
+  "graph_info": {
+    "nodes": 160078,
+    "edges": 398838
+  },
+  "node_assignment": {
+    "total_points": 0,
+    "successful_assignments": 0,
+    "failed_assignments": 0
+  },
+  "path_computation": {
+    "total_pairs": 0,
+    "successful_paths": 0,
+    "failed_paths": 0,
+    "same_node_pairs": 0
+  },
+  "distance_stats": {
+    "min": null,
+    "max": null,
+    "mean": null,
+    "median": null
+  },
+  "ratio_stats": {
+    "min": null,
+    "max": null,
+    "mean": null,
+    "median": null,
+    "nan_count": 0
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "run_id": "20250516_132839",
+  "start_time": "2025-05-16T13:28:40.570342",
+  "git_commit": "ddf6ad1df2fb91bd7594caa996b548ede208c729",
+  "env_file": "pipeline_stats/20250516_132839/environment.txt",
+  "steps": {
+    "cleaned_points": {
+      "timestamp": "2025-05-16T13:28:41.999242",
+      "status": "reused",
+      "reused_from": "data/cleaned_points_in_beijing_20250516_122512.parquet",
+      "output_path": "data/cleaned_points_in_beijing_20250516_122512.parquet"
+    },
+    "cleaned_with_period_id": {
+      "timestamp": "2025-05-16T13:28:45.819657",
+      "status": "reused",
+      "reused_from": "data/cleaned_with_period_id_in_beijing_20250516_122512.parquet",
+      "output_path": "data/cleaned_with_period_id_in_beijing_20250516_122512.parquet"
+    },
+    "periods_with_sld_ratio": {
+      "timestamp": "2025-05-16T13:28:47.470480",
+      "status": "computed",
+      "reused_from": "data/periods_with_sld_ratio_20250516_122512.parquet",
+      "output_path": "data/periods_with_network_ratio_flagged_20250516_122512.parquet"
+    }
+  },
+  "args": {
+    "clean": false,
+    "clean_step": null,
+    "run_analysis": false,
+    "seed": 42,
+    "reuse_latest": true
+  }
+}

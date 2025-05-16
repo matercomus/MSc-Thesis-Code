@@ -1,0 +1,14 @@
+{
+  "run_id": "20250516_132607",
+  "start_time": "2025-05-16T13:26:08.194359",
+  "git_commit": "ddf6ad1df2fb91bd7594caa996b548ede208c729",
+  "env_file": "pipeline_stats/20250516_132607/environment.txt",
+  "steps": {},
+  "args": {
+    "clean": false,
+    "clean_step": null,
+    "run_analysis": false,
+    "seed": 42,
+    "reuse_latest": true
+  }
+}

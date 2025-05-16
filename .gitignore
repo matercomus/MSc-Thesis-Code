@@ -20,3 +20,5 @@ checkpoints/
 
 beijing_drive.graphml
 beijing_drive.graphml.meta.json
+*.parquet
+network_checkpoints/
