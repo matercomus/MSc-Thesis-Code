@@ -1,0 +1,4 @@
+2025-05-17 01:50:32,889 INFO Random seed set to 42
+2025-05-17 01:50:33,372 INFO Saved pip freeze to pipeline_stats/20250517_015032/environment.txt
+2025-05-17 01:50:33,872 INFO [REUSE] Using data/cleaned_points_in_beijing_20250517_004207.parquet for cleaned_points step
+2025-05-17 01:50:34,396 INFO [SKIP] data/cleaned_points_in_beijing_20250517_004207.parquet is up-to-date

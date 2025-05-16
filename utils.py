@@ -426,6 +426,8 @@ def detect_outliers_pd(
     """
     Detect trajectory outliers using Isolation Forest over features: speed, acceleration, direction change.
     Returns a pandas Series of 1 (inlier) or -1 (outlier) indexed by the input DataFrame index.
+    
+    Note: For very large datasets, you can parallelize this function across groups (e.g., per license_plate) using ThreadPoolExecutor for even more speed.
     """
     # Ensure dependencies available
     if IsolationForest is None or StandardScaler is None:
@@ -493,7 +495,7 @@ def detect_outliers_pd(
         contamination=contamination,
         random_state=random_state,
         n_estimators=n_estimators,
-        n_jobs=n_jobs,
+        n_jobs=-1,
     )
     outlier_labels = clf.fit_predict(scaled)
 
@@ -501,7 +503,29 @@ def detect_outliers_pd(
     result = pd.Series(1, index=df_copy.index)
     result.loc[feat.index] = outlier_labels
     return result
-  
+
+def detect_outliers_parallel_by_group(df: pd.DataFrame, group_col: str = 'license_plate', **kwargs) -> pd.Series:
+    """
+    Parallelize outlier detection across groups (e.g., per license_plate) using ThreadPoolExecutor.
+    Returns a pandas Series of 1 (inlier) or -1 (outlier) indexed by the input DataFrame index.
+    Usage:
+        result = detect_outliers_parallel_by_group(df, group_col='license_plate', contamination=0.05)
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    groups = list(df.groupby(group_col, observed=False))
+    results = {}
+    def process_group(item):
+        name, group = item
+        return name, detect_outliers_pd(group, **kwargs)
+    with ThreadPoolExecutor() as executor:
+        futures = {executor.submit(process_group, item): item[0] for item in groups}
+        for fut in as_completed(futures):
+            name, res = fut.result()
+            results[name] = res
+    # Concatenate results in original order
+    outlier_series = pd.concat([results[name] for name in df[group_col].unique()])
+    return outlier_series.sort_index()
+
 def compute_iqr_thresholds(
     lazy_df: pl.LazyFrame,
     iqr_multiplier: float = 1.5
@@ -565,3 +589,20 @@ def attach_period_id(cleaned_df: pl.DataFrame, period_df: pl.DataFrame) -> pl.Da
         (pl.col("timestamp") >= pl.col("start_time")) & (pl.col("timestamp") <= pl.col("end_time"))
     )
     return joined
+
+def set_polars_threads(num_threads: int):
+    """
+    Set the number of threads Polars uses globally for all DataFrame operations.
+    Call this at the start of your pipeline to control CPU usage.
+    """
+    import polars as pl
+    try:
+        pl.Config.set_global_thread_pool(num_threads)
+    except AttributeError:
+        try:
+            pl.set_tbl_threads(num_threads)
+        except AttributeError:
+            import warnings
+            warnings.warn(
+                "Could not set Polars thread count: no supported method found in this Polars version."
+            )

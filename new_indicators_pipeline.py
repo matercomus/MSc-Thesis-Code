@@ -23,10 +23,11 @@ from utils import (
     select_final_columns,
     add_period_id,
     summarize_periods,
-    detect_outliers_pd,
+    detect_outliers_parallel_by_group,
     compute_iqr_thresholds,
     compute_generic_iqr_threshold,
     attach_period_id,
+    set_polars_threads,
 )
 import osmnx as ox
 import networkx as nx
@@ -76,6 +77,7 @@ ox.settings.default_response_json = True
 # ox.settings.default_access = 'all'  # Removed: causes Overpass query errors
 
 def main():
+    set_polars_threads(num_threads=8)
     parser = argparse.ArgumentParser()
     parser.add_argument("--clean", action="store_true", help="Remove all checkpoints, meta, and intermediate outputs before running pipeline.")
     parser.add_argument("--clean-step", type=str, help="Remove outputs/meta/checkpoints for specific steps (comma-separated). Valid steps: cleaned_points, cleaned_with_period_id, periods_with_sld_ratio, network, osm_graph.")
@@ -215,6 +217,12 @@ def main():
     # Update LAST_RUN_ID after step (extra robustness)
     with open(os.path.join("pipeline_stats", "LAST_RUN_ID"), "w") as f:
         f.write(run_id)
+
+    # --- Outlier Detection (Isolation Forest, parallel by group) ---
+    if cleaned_df is not None:
+        pd_df = cleaned_df.to_pandas()
+        pd_df["is_outlier"] = detect_outliers_parallel_by_group(pd_df, group_col="license_plate").values
+        cleaned_df = pl.from_pandas(pd_df)
 
     # --- Step 2: Cleaned with period_id ---
     step_name = "cleaned_with_period_id"

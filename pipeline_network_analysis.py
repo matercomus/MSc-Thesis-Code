@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 import seaborn as sns
 from tabulate import tabulate
+from concurrent.futures import ThreadPoolExecutor
 
 
 def get_analysis_dir():
@@ -373,22 +374,26 @@ def run_full_analysis(run_id=None, compare_to=None):
             periods_path = step.get("output_path", periods_path)
     periods = pd.read_parquet(periods_path)
     plots = []
-    # Histograms
-    for col, desc, xlabel in [
-        ("route_deviation_ratio", "Route Deviation Ratio Histogram", "Route Deviation Ratio"),
-        ("network_shortest_distance", "Network Shortest Distance Histogram", "Network Shortest Distance (km)")
-    ]:
-        fname = f"{col}_hist.png"
-        save_path = os.path.join(analysis_dir, fname)
-        plot_histogram(periods, col, desc, xlabel, save_path)
-        plots.append((desc, fname))
-    # Bar plot for indicator flags
-    if "indicator_flags" in stats:
-        flag_df = pd.DataFrame(list(stats["indicator_flags"].items()), columns=["flag", "count"]).set_index("flag")
-        fname = "indicator_flags_bar.png"
-        save_path = os.path.join(analysis_dir, fname)
-        plot_bar(flag_df, "count", "Indicator Flag Counts", "Flag", "Count", save_path)
-        plots.append(("Indicator Flag Counts", fname))
+    # Histograms and bar plots in parallel
+    plot_tasks = []
+    with ThreadPoolExecutor() as executor:
+        for col, desc, xlabel in [
+            ("route_deviation_ratio", "Route Deviation Ratio Histogram", "Route Deviation Ratio"),
+            ("network_shortest_distance", "Network Shortest Distance Histogram", "Network Shortest Distance (km)")
+        ]:
+            fname = f"{col}_hist.png"
+            save_path = os.path.join(analysis_dir, fname)
+            plot_tasks.append((desc, fname, executor.submit(plot_histogram, periods, col, desc, xlabel, save_path)))
+        # Bar plot for indicator flags
+        if "indicator_flags" in stats:
+            flag_df = pd.DataFrame(list(stats["indicator_flags"].items()), columns=["flag", "count"]).set_index("flag")
+            fname = "indicator_flags_bar.png"
+            save_path = os.path.join(analysis_dir, fname)
+            plot_tasks.append(("Indicator Flag Counts", fname, executor.submit(plot_bar, flag_df, "count", "Indicator Flag Counts", "Flag", "Count", save_path)))
+        # Wait for all plots to finish
+        for desc, fname, fut in plot_tasks:
+            fut.result()
+            plots.append((desc, fname))
     # Comparison
     compare_stats = None
     compare_run_id = None

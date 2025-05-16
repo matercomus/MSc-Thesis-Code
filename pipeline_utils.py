@@ -244,7 +244,7 @@ def run_network_ratio_step(periods_sld_path, run_id, stats, args, resume=False):
             periods_path=periods_sld_path,
             osm_graph_path=osm_graph_path,
             output_path=network_ratio_path,
-            batch_size=500,
+            batch_size=2000,
             num_workers=8,
             checkpoint_dir="network_checkpoints",
             run_id=run_id,
@@ -272,7 +272,7 @@ def run_network_ratio_step(periods_sld_path, run_id, stats, args, resume=False):
                 periods_path=periods_sld_path,
                 osm_graph_path=osm_graph_path,
                 output_path=network_ratio_path,
-                batch_size=500,
+                batch_size=2000,
                 num_workers=8,
                 checkpoint_dir="network_checkpoints",
                 run_id=run_id,
@@ -327,14 +327,12 @@ def compute_network_shortest_paths_batched(
     periods_path,
     osm_graph_path,
     output_path,
-    batch_size=500,
+    batch_size=2000,
     num_workers=8,
     checkpoint_dir="network_checkpoints",
     run_id=None,
     node_cache_batch_size=500,
-    node_cache_num_workers=8,
     output_dir="pipeline_stats",
-    clean_mode=False,
     resume=False
 ):
     import polars as pl
@@ -396,17 +394,23 @@ def compute_network_shortest_paths_batched(
         unique_points.add((e_lat, e_lon))
     unique_points = list(unique_points)
     logger.info(f"[NODE CACHE] Found {len(unique_points)} unique points for node assignment.")
-    # Assign nodes in batches
+    # Assign nodes in batches (parallelized)
     point_to_node = {}
-    for i in tqdm(range(0, len(unique_points), node_cache_batch_size), desc="Node assignment batches"):
-        batch_points = unique_points[i:i+node_cache_batch_size]
+    def assign_nodes_batch(batch_points):
         lats, lons = zip(*batch_points)
         try:
             nodes = ox.nearest_nodes(G, lons, lats)
         except Exception:
             nodes = [None] * len(batch_points)
-        for (lat, lon), node in zip(batch_points, nodes):
-            point_to_node[(lat, lon)] = node
+        return list(zip(batch_points, nodes))
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = []
+        for i in range(0, len(unique_points), node_cache_batch_size):
+            batch_points = unique_points[i:i+node_cache_batch_size]
+            futures.append(executor.submit(assign_nodes_batch, batch_points))
+        for future in tqdm(futures, desc="Node assignment batches (parallel)"):
+            for (latlon, node) in future.result():
+                point_to_node[latlon] = node
     logger.info(f"[NODE CACHE] Node assignment complete.")
     # --- Streaming batch processing of periods ---
     scan = pl.scan_parquet(periods_path)
@@ -426,7 +430,7 @@ def compute_network_shortest_paths_batched(
         # Assign nodes
         batch['start_node'] = [point_to_node.get((row['start_latitude'], row['start_longitude'])) for _, row in batch.iterrows()]
         batch['end_node'] = [point_to_node.get((row['end_latitude'], row['end_longitude'])) for _, row in batch.iterrows()]
-        # Compute shortest paths for all pairs in this batch
+        # Compute shortest paths for all pairs in this batch (parallelized)
         def compute_pair(row):
             orig, dest = row['start_node'], row['end_node']
             if orig is None or dest is None:
@@ -438,7 +442,9 @@ def compute_network_shortest_paths_batched(
                 return dist
             except Exception:
                 return float('nan')
-        batch['network_shortest_distance'] = batch.apply(compute_pair, axis=1)
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            results = list(executor.map(compute_pair, [row for _, row in batch.iterrows()]))
+        batch['network_shortest_distance'] = results
         batch['route_deviation_ratio'] = batch.apply(
             lambda row: row['sum_distance'] / row['network_shortest_distance']
             if not pd.isna(row['network_shortest_distance']) and row['network_shortest_distance'] > 0
