@@ -554,3 +554,14 @@ def compute_generic_iqr_threshold(
     q3 = q["q3"][0]
     iqr = q3 - q1
     return q3 + iqr_multiplier * iqr
+
+def attach_period_id(cleaned_df: pl.DataFrame, period_df: pl.DataFrame) -> pl.DataFrame:
+    period_meta = period_df.select(["license_plate", "period_id", "start_time", "end_time"])
+    joined = cleaned_df.join(
+        period_meta,
+        on=["license_plate"],
+        how="left",
+    ).filter(
+        (pl.col("timestamp") >= pl.col("start_time")) & (pl.col("timestamp") <= pl.col("end_time"))
+    )
+    return joined

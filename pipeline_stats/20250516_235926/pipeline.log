@@ -1,0 +1,11 @@
+2025-05-16 23:59:26,826 INFO Random seed set to 42
+2025-05-16 23:59:27,306 INFO Saved pip freeze to pipeline_stats/20250516_235926/environment.txt
+2025-05-16 23:59:27,881 INFO [REUSE] Using data/cleaned_points_in_beijing_20250516_214756.parquet for cleaned_points step
+2025-05-16 23:59:28,371 INFO [SKIP] data/cleaned_points_in_beijing_20250516_214756.parquet is up-to-date
+2025-05-16 23:59:30,066 INFO [REUSE] Using data/cleaned_with_period_id_in_beijing_20250516_214756.parquet for cleaned_with_period_id step
+2025-05-16 23:59:30,732 INFO [SKIP] data/cleaned_with_period_id_in_beijing_20250516_214756.parquet is up-to-date
+2025-05-16 23:59:32,540 INFO [COMPUTE] Computing periods_with_sld_ratio from scratch
+2025-05-17 00:00:17,279 INFO [PROFILE] periods_with_sld_ratio: time=44.74s, mem_before=2208.75MB, mem_after=3588.17MB, delta=1379.43MB
+2025-05-17 00:00:17,973 INFO [REUSE] OSM graph is up-to-date: beijing_drive.graphml
+2025-05-17 00:00:17,974 INFO [COMPUTE] Computing network_ratio from scratch
+2025-05-17 00:00:17,974 INFO [PROFILE] network_shortest_paths: time=0.00s, mem_before=3588.17MB, mem_after=3588.17MB, delta=0.00MB
