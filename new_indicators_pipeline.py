@@ -39,6 +39,11 @@ import glob
 import shutil
 import json
 from datetime import datetime
+import random
+import subprocess
+import sys
+import re
+
 
 # Set OSMnx settings for debugging and reproducibility
 ox.settings.log_console = True
@@ -109,18 +114,12 @@ def ensure_osm_graph(osm_graph_path, periods_path, buffer=None):
         "final_edge_count": len(G.edges),
     })
 
-def save_step_stats(step_name: str, stats: dict, output_dir: str = "pipeline_stats"):
-    """Save statistics for a pipeline step to a JSON file.
-    
-    Args:
-        step_name: Name of the pipeline step
-        stats: Dictionary of statistics to save
-        output_dir: Directory to save stats files in
-    """
-    os.makedirs(output_dir, exist_ok=True)
+def save_step_stats(step_name: str, stats: dict, run_id: str, output_dir: str = "pipeline_stats"):
+    """Save statistics for a pipeline step to a JSON file in a per-run subfolder."""
+    run_dir = os.path.join(output_dir, run_id)
+    os.makedirs(run_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = os.path.join(output_dir, f"{step_name}_stats_{timestamp}.json")
-    
+    output_path = os.path.join(run_dir, f"{step_name}_stats_{timestamp}.json")
     with open(output_path, "w") as f:
         json.dump(stats, f, indent=2, default=str)
     logging.info(f"Saved {step_name} statistics to {output_path}")
@@ -131,7 +130,10 @@ def compute_network_shortest_paths_batched(
     output_path,
     batch_size=500,
     num_workers=8,
-    checkpoint_dir="network_checkpoints"
+    checkpoint_dir="network_checkpoints",
+    run_id=None,
+    node_cache_batch_size=5000,
+    node_cache_num_workers=4
 ):
     # Setup logging
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -142,6 +144,56 @@ def compute_network_shortest_paths_batched(
     periods_df = pd.read_parquet(periods_path)
     G = ox.load_graphml(osm_graph_path)
     
+    # --- Persistent node cache logic (vectorized, batched, parallel) ---
+    node_cache_path = os.path.join(checkpoint_dir, "point_to_node.parquet")
+    node_cache_meta = node_cache_path + ".meta.json"
+    periods_hash = file_hash(periods_path)
+    graph_hash = file_hash(osm_graph_path)
+    cache_valid = False
+    if os.path.exists(node_cache_path) and os.path.exists(node_cache_meta):
+        with open(node_cache_meta) as f:
+            meta = json.load(f)
+        if meta.get("periods_hash") == periods_hash and meta.get("graph_hash") == graph_hash:
+            cache_valid = True
+    if cache_valid:
+        logger.info(f"Loading persistent node cache from {node_cache_path}")
+        node_df = pd.read_parquet(node_cache_path)
+        point_to_node = {(row.lat, row.lon): row.node for row in node_df.itertuples(index=False)}
+    else:
+        # Precompute/caching nearest nodes for all unique points (vectorized, batched, parallel)
+        all_points = list(set(
+            list(zip(periods_df['start_latitude'], periods_df['start_longitude'])) +
+            list(zip(periods_df['end_latitude'], periods_df['end_longitude']))
+        ))
+        logger.info(f"Caching nearest OSM nodes for {len(all_points)} unique points (batched, parallel)...")
+        point_to_node = {}
+        node_rows = []
+        def process_batch(batch):
+            lats, lons = zip(*batch)
+            try:
+                nodes = ox.nearest_nodes(G, X=lons, Y=lats)
+                return list(zip(batch, nodes))
+            except Exception as e:
+                logger.warning(f"Failed batch: {e}")
+                # Mark all as None
+                return list(zip(batch, [None]*len(batch)))
+        # Split into batches
+        batches = [all_points[i:i+node_cache_batch_size] for i in range(0, len(all_points), node_cache_batch_size)]
+        with ThreadPoolExecutor(max_workers=node_cache_num_workers) as executor:
+            futures = {executor.submit(process_batch, batch): batch for batch in batches}
+            for future in tqdm(as_completed(futures), total=len(batches), desc="Node cache batches"):
+                results = future.result()
+                for (latlon, node) in results:
+                    lat, lon = latlon
+                    point_to_node[(lat, lon)] = node
+                    node_rows.append({"lat": lat, "lon": lon, "node": node})
+        # Save cache
+        node_df = pd.DataFrame(node_rows)
+        node_df.to_parquet(node_cache_path)
+        with open(node_cache_meta, "w") as f:
+            json.dump({"periods_hash": periods_hash, "graph_hash": graph_hash}, f)
+        logger.info(f"Saved persistent node cache to {node_cache_path}")
+
     # Initialize statistics
     stats = {
         "total_periods": len(periods_df),
@@ -174,26 +226,6 @@ def compute_network_shortest_paths_batched(
             "nan_count": 0,
         }
     }
-
-    # Precompute/caching nearest nodes for all unique points
-    # Create points in (lat, lon) order for OSMnx
-    all_points = set(
-        list(zip(periods_df['start_latitude'], periods_df['start_longitude'])) +
-        list(zip(periods_df['end_latitude'], periods_df['end_longitude']))
-    )
-    logger.info(f"Caching nearest OSM nodes for {len(all_points)} unique points...")
-    point_to_node = {}
-    stats["node_assignment"]["total_points"] = len(all_points)
-    
-    for lat, lon in tqdm(all_points, desc="Nearest node cache"):
-        try:
-            # OSMnx expects (y, x) order, i.e., (lat, lon)
-            point_to_node[(lat, lon)] = ox.nearest_nodes(G, lat, lon)
-            stats["node_assignment"]["successful_assignments"] += 1
-        except Exception as e:
-            logger.warning(f"Failed to find nearest node for point ({lat}, {lon}): {e}")
-            point_to_node[(lat, lon)] = None
-            stats["node_assignment"]["failed_assignments"] += 1
 
     # Unique key for checkpointing
     periods_df['unique_key'] = periods_df['license_plate'].astype(str) + '_' + periods_df['period_id'].astype(str)
@@ -306,14 +338,17 @@ def compute_network_shortest_paths_batched(
         })
     
     # Save statistics
-    save_step_stats("network_shortest_paths", stats)
+    if run_id is not None:
+        save_step_stats("network_shortest_paths", stats, run_id)
+    else:
+        save_step_stats("network_shortest_paths", stats, "default")
     
     final_df.to_parquet(output_path)
     logger.info(f"Saved final results to {output_path}")
 
     return final_df
 
-def compute_network_outlier_flag(input_path, output_path, iqr_multiplier=1.5):
+def compute_network_outlier_flag(input_path, output_path, iqr_multiplier=1.5, run_id=None):
     input_paths = {"network_ratio_hash": input_path}
     if is_up_to_date(output_path, input_paths):
         print(f"{output_path} is up-to-date. Skipping computation.")
@@ -369,7 +404,10 @@ def compute_network_outlier_flag(input_path, output_path, iqr_multiplier=1.5):
         logger.info(f"Found {stats['outliers']} network outliers out of {stats['valid_ratios']} valid ratios")
     
     # Save statistics
-    save_step_stats("network_outlier_flag", stats)
+    if run_id is not None:
+        save_step_stats("network_outlier_flag", stats, run_id)
+    else:
+        save_step_stats("network_outlier_flag", stats, "default")
     
     df.to_parquet(output_path)
     write_meta(str(output_path) + '.meta.json', {
@@ -457,13 +495,33 @@ def clean_step_outputs(step):
                     print(f"Could not delete {path}: {e}")
     print("Step clean complete.")
 
+def find_latest_output(pattern):
+    files = glob.glob(pattern)
+    if not files:
+        return None
+    # Extract timestamp/run_id from filename
+    def extract_runid(fname):
+        m = re.search(r'_(\d{8}_\d{6})', fname)
+        return m.group(1) if m else ''
+    files = [(f, extract_runid(f)) for f in files]
+    # Sort by run_id (timestamp)
+    files = sorted(files, key=lambda x: x[1], reverse=True)
+    return files[0][0] if files else None
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--clean", action="store_true", help="Remove all checkpoints, meta, and intermediate outputs before running pipeline.")
     parser.add_argument("--clean-step", type=str, help="Remove outputs/meta/checkpoints for specific steps (comma-separated). Valid steps: cleaned_points, cleaned_with_period_id, periods_with_sld_ratio, network, osm_graph.")
+    parser.add_argument("--run-analysis", action="store_true", help="Automatically run the analysis tool after pipeline completes.")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
+    parser.add_argument("--reuse-latest", action="store_true", help="Reuse latest available outputs for each step if possible.")
     args = parser.parse_args()
     if args.clean and args.clean_step:
         parser.error("--clean and --clean-step cannot be used together.")
+    if args.clean and args.reuse_latest:
+        parser.error("--clean and --reuse-latest cannot be used together.")
+    if args.clean_step and args.reuse_latest:
+        parser.error("--clean-step and --reuse-latest cannot be used together.")
     if args.clean:
         clean_pipeline_outputs()
     if args.clean_step:
@@ -474,11 +532,36 @@ def main():
     configure_logging()
     logging.info("Starting indicators pipeline (pure Python version)")
 
+    # --- Generate run_id and set up per-run stats folder ---
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_stats_dir = os.path.join("pipeline_stats", run_id)
+    os.makedirs(run_stats_dir, exist_ok=True)
+
+    # --- Set and log random seed for reproducibility ---
+    seed = args.seed
+    np.random.seed(seed)
+    random.seed(seed)
+    logging.info(f"Random seed set to {seed}")
+
+    # --- Save pip freeze output for environment reproducibility ---
+    env_txt = os.path.join(run_stats_dir, "environment.txt")
+    with open(env_txt, "w") as f:
+        subprocess.run(["pip", "freeze"], stdout=f)
+    logging.info(f"Saved pip freeze to {env_txt}")
+
     # --- Step 1: Cleaned points ---
-    cleaned_points_path = "data/cleaned_points_in_beijing.parquet"
+    cleaned_points_path = f"data/cleaned_points_in_beijing_{run_id}.parquet"
     cleaned_points_meta = cleaned_points_path + ".meta.json"
     filtered_points_path = "data/filtered_points_in_beijing.parquet"
     input_paths = {"filtered_points_hash": filtered_points_path}
+    reuse_cleaned_points = False
+    if args.reuse_latest and not os.path.exists(cleaned_points_path):
+        latest = find_latest_output("data/cleaned_points_in_beijing_*.parquet")
+        if latest and is_up_to_date(latest, input_paths):
+            logging.info(f"[REUSE] Using {latest} for cleaned points step.")
+            cleaned_points_path = latest
+            cleaned_points_meta = cleaned_points_path + ".meta.json"
+            reuse_cleaned_points = True
     if is_up_to_date(cleaned_points_path, input_paths):
         logging.info(f"{cleaned_points_path} is up-to-date. Skipping computation.")
         cleaned_df = pl.read_parquet(cleaned_points_path)
@@ -505,12 +588,17 @@ def main():
         base_df = base_df.collect()
         logging.info(f"Base DataFrame shape: {base_df.shape}")
 
-        # Detect outliers using Isolation Forest
-        logging.info("Detecting trajectory outliers (Isolation Forest)...")
-        pd_df = base_df.to_pandas()
+        # Detect outliers using Isolation Forest (parallel, reproducible)
+        logging.info("Detecting trajectory outliers (Isolation Forest, parallel, reproducible)...")
+        needed_cols = ["license_plate", "timestamp", "implied_speed_kph", "time_diff_seconds", "latitude", "longitude"]
+        pd_df = base_df.select(needed_cols).to_pandas()
         tqdm.pandas(desc="Outlier detection")
-        pd_df["is_outlier"] = detect_outliers_pd(pd_df).values
-        results = pl.from_pandas(pd_df)
+        pd_df["is_outlier"] = detect_outliers_pd(pd_df, n_jobs=-1, random_state=seed).values
+        # Merge is_outlier back into base_df (Polars)
+        base_df = base_df.with_columns(
+            pl.Series("is_outlier", pd_df["is_outlier"].values)
+        )
+        results = base_df
 
         # Remove license plates with any temporal gap or position jump
         logging.info("Filtering out taxis with any temporal gap or position jump...")
@@ -522,13 +610,27 @@ def main():
             .drop(["is_temporal_gap", "is_position_jump"])
         )
         logging.info(f"Cleaned DataFrame shape: {cleaned_df.shape}")
+        # Validation
+        if cleaned_df.is_empty():
+            logging.error("Cleaned DataFrame is empty after filtering! Aborting.")
+            raise RuntimeError("Cleaned DataFrame is empty.")
+        if cleaned_df.null_count().sum() > 0:
+            logging.warning("Cleaned DataFrame contains nulls.")
         save_parquet(cleaned_df, cleaned_points_path, label="Cleaned points")
-        write_meta(cleaned_points_meta, {"filtered_points_hash": file_hash(filtered_points_path)})
+        write_meta(cleaned_points_meta, {"filtered_points_hash": file_hash(filtered_points_path), "seed": seed})
 
     # --- Step 2: Cleaned with period_id ---
-    cleaned_with_pid_path = "data/cleaned_with_period_id_in_beijing.parquet"
+    cleaned_with_pid_path = f"data/cleaned_with_period_id_in_beijing_{run_id}.parquet"
     cleaned_with_pid_meta = cleaned_with_pid_path + ".meta.json"
     input_paths = {"cleaned_points_hash": cleaned_points_path}
+    reuse_cleaned_with_pid = False
+    if args.reuse_latest and not os.path.exists(cleaned_with_pid_path):
+        latest = find_latest_output("data/cleaned_with_period_id_in_beijing_*.parquet")
+        if latest and is_up_to_date(latest, input_paths):
+            logging.info(f"[REUSE] Using {latest} for cleaned_with_period_id step.")
+            cleaned_with_pid_path = latest
+            cleaned_with_pid_meta = cleaned_with_pid_path + ".meta.json"
+            reuse_cleaned_with_pid = True
     if is_up_to_date(cleaned_with_pid_path, input_paths):
         logging.info(f"{cleaned_with_pid_path} is up-to-date. Skipping computation.")
         cleaned_with_period_id = pl.read_parquet(cleaned_with_pid_path)
@@ -545,13 +647,25 @@ def main():
         logging.info("Attaching period_id to cleaned points...")
         cleaned_with_period_id = attach_period_id(cleaned_df, period_df)
         logging.info(f"Cleaned with period_id shape: {cleaned_with_period_id.shape}")
+        # Validation
+        if cleaned_with_period_id.is_empty():
+            logging.error("Cleaned with period_id DataFrame is empty! Aborting.")
+            raise RuntimeError("Cleaned with period_id DataFrame is empty.")
         save_parquet(cleaned_with_period_id, cleaned_with_pid_path, label="Cleaned points with period_id")
-        write_meta(cleaned_with_pid_meta, {"cleaned_points_hash": file_hash(cleaned_points_path)})
+        write_meta(cleaned_with_pid_meta, {"cleaned_points_hash": file_hash(cleaned_points_path), "seed": seed})
 
     # --- Step 3: Period summary with SLD ratio ---
-    periods_sld_path = "data/periods_with_sld_ratio.parquet"
+    periods_sld_path = f"data/periods_with_sld_ratio_{run_id}.parquet"
     periods_sld_meta = periods_sld_path + ".meta.json"
     input_paths = {"cleaned_with_pid_hash": cleaned_with_pid_path}
+    reuse_periods_sld = False
+    if args.reuse_latest and not os.path.exists(periods_sld_path):
+        latest = find_latest_output("data/periods_with_sld_ratio_*.parquet")
+        if latest and is_up_to_date(latest, input_paths):
+            logging.info(f"[REUSE] Using {latest} for periods_with_sld_ratio step.")
+            periods_sld_path = latest
+            periods_sld_meta = periods_sld_path + ".meta.json"
+            reuse_periods_sld = True
     if is_up_to_date(periods_sld_path, input_paths):
         logging.info(f"{periods_sld_path} is up-to-date. Skipping computation.")
         period_df = pl.read_parquet(periods_sld_path)
@@ -578,30 +692,67 @@ def main():
         period_df = period_df.with_columns(
             (pl.col("sld_ratio") > sld_th).alias("is_sld_outlier")
         )
+        # Validation
+        if period_df.is_empty():
+            logging.error("Period summary DataFrame is empty! Aborting.")
+            raise RuntimeError("Period summary DataFrame is empty.")
         save_parquet(period_df, periods_sld_path, label="Period summary with SLD ratio and outlier flags")
-        write_meta(periods_sld_meta, {"cleaned_with_pid_hash": file_hash(cleaned_with_pid_path)})
+        write_meta(periods_sld_meta, {"cleaned_with_pid_hash": file_hash(cleaned_with_pid_path), "seed": seed})
 
-    # After period_df is created and saved as data/periods_with_sld_ratio.parquet
+    # After period_df is created and saved as data/periods_with_sld_ratio_{run_id}.parquet
     # 1. Ensure OSM graph
     ensure_osm_graph("beijing_drive.graphml", periods_sld_path)
     # 2. Compute network shortest paths and ratios (batched, threaded, checkpointed)
-    network_ratio_path = "data/periods_with_network_ratio.parquet"
+    network_ratio_path = f"data/periods_with_network_ratio_{run_id}.parquet"
+    reuse_network_ratio = False
+    input_paths = {"periods_sld_hash": periods_sld_path}
+    if args.reuse_latest and not os.path.exists(network_ratio_path):
+        latest = find_latest_output("data/periods_with_network_ratio_*.parquet")
+        if latest and is_up_to_date(latest, input_paths):
+            logging.info(f"[REUSE] Using {latest} for network_ratio step.")
+            network_ratio_path = latest
+            reuse_network_ratio = True
     compute_network_shortest_paths_batched(
         periods_path=periods_sld_path,
         osm_graph_path="beijing_drive.graphml",
         output_path=network_ratio_path,
         batch_size=500,
         num_workers=8,
-        checkpoint_dir="network_checkpoints"
+        checkpoint_dir="network_checkpoints",
+        run_id=run_id
     )
     # 3. Compute threshold and flag outliers
-    final_periods_path = "data/periods_with_network_ratio_flagged.parquet"
+    final_periods_path = f"data/periods_with_network_ratio_flagged_{run_id}.parquet"
+    reuse_final_periods = False
+    input_paths = {"network_ratio_hash": network_ratio_path}
+    if args.reuse_latest and not os.path.exists(final_periods_path):
+        latest = find_latest_output("data/periods_with_network_ratio_flagged_*.parquet")
+        if latest and is_up_to_date(latest, input_paths):
+            logging.info(f"[REUSE] Using {latest} for network_ratio_flagged step.")
+            final_periods_path = latest
+            reuse_final_periods = True
     compute_network_outlier_flag(
         input_path=network_ratio_path,
-        output_path=final_periods_path
+        output_path=final_periods_path,
+        run_id=run_id
     )
 
+    # --- Write LAST_RUN_ID file ---
+    with open(os.path.join("pipeline_stats", "LAST_RUN_ID"), "w") as f:
+        f.write(run_id)
+
     logging.info("Pipeline completed: all parquet files written.")
+
+    # --- Optionally run analysis tool ---
+    if args.run_analysis:
+        analysis_cmd = [
+            sys.executable, "pipeline_network_analysis.py",
+            "--graph", "beijing_drive.graphml",
+            "--periods", final_periods_path,
+            "--all"
+        ]
+        logging.info(f"Running analysis tool: {' '.join(analysis_cmd)}")
+        subprocess.run(analysis_cmd)
 
 if __name__ == "__main__":
     main()

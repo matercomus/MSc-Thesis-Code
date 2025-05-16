@@ -421,6 +421,7 @@ def detect_outliers_pd(
     contamination: float = 0.05,
     random_state: int = 42,
     n_estimators: int = 100,
+    n_jobs: int = 1,
 ) -> pd.Series:
     """
     Detect trajectory outliers using Isolation Forest over features: speed, acceleration, direction change.
@@ -489,6 +490,7 @@ def detect_outliers_pd(
         contamination=contamination,
         random_state=random_state,
         n_estimators=n_estimators,
+        n_jobs=n_jobs,
     )
     outlier_labels = clf.fit_predict(scaled)
 
