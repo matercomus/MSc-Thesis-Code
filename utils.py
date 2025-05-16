@@ -410,7 +410,7 @@ def summarize_periods(df: pl.DataFrame) -> pl.DataFrame:
             (
                 pl.when(pl.col("straight_line_distance_km") > 0)
                 .then(pl.col("sum_distance") / pl.col("straight_line_distance_km"))
-                .otherwise(0.0)
+                .otherwise(float('nan'))
             ).alias("sld_ratio")
         )
 

@@ -29,7 +29,7 @@ from utils import (
 )
 import osmnx as ox
 import networkx as nx
-from pipeline_utils import file_hash, write_meta, is_up_to_date
+from pipeline_utils import file_hash, write_meta, is_up_to_date, PipelineStats
 from pathlib import Path
 import hashlib
 import os
@@ -641,6 +641,8 @@ def main():
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_stats_dir = os.path.join("pipeline_stats", run_id)
     os.makedirs(run_stats_dir, exist_ok=True)
+    # --- Initialize pipeline stats ---
+    stats = PipelineStats(run_id, output_dir="pipeline_stats")
     # --- Set up per-run logging ---
     log_path = os.path.join(run_stats_dir, "pipeline.log")
     # Remove all handlers associated with the root logger object (for idempotency)
@@ -727,12 +729,11 @@ def main():
         # Load filtered points
         logging.info("Loading filtered_points_in_beijing.parquet...")
         lazy_df = pl.scan_parquet(filtered_points_path)
-
+        n_before = lazy_df.collect().height
         # Compute robust thresholds using IQR on occupied trips only
         logging.info("Computing IQR-based thresholds for time gaps and speeds...")
         time_gap_th, speed_th = compute_iqr_thresholds(lazy_df)
         logging.info(f"Thresholds: time_gap={time_gap_th:.2f} sec, speed={speed_th:.2f} kph")
-
         # Compute base indicators and abnormality flags
         logging.info("Computing time, distance, speed, and abnormality flags...")
         base_df = (
@@ -744,29 +745,36 @@ def main():
         )
         logging.info("Collecting base DataFrame (this may take a while)...")
         base_df = base_df.collect()
+        n_after = base_df.height
+        stats.record_filtering("base_cleaning", n_before, n_after, "Initial cleaning and feature engineering")
         logging.info(f"Base DataFrame shape: {base_df.shape}")
-
         # Detect outliers using Isolation Forest (parallel, reproducible)
         logging.info("Detecting trajectory outliers (Isolation Forest, parallel, reproducible)...")
         needed_cols = ["license_plate", "timestamp", "implied_speed_kph", "time_diff_seconds", "latitude", "longitude"]
         pd_df = base_df.select(needed_cols).to_pandas()
         tqdm.pandas(desc="Outlier detection")
-        pd_df["is_outlier"] = detect_outliers_pd(pd_df, n_jobs=-1, random_state=seed).values
+        # Show progress bar for outlier detection
+        outlier_pred = []
+        for chunk in tqdm(np.array_split(pd_df, max(1, len(pd_df)//100000)), desc="Detecting outliers", total=max(1, len(pd_df)//100000)):
+            outlier_pred.append(detect_outliers_pd(chunk, n_jobs=-1, random_state=seed))
+        pd_df["is_outlier"] = np.concatenate([arr.values if hasattr(arr, 'values') else arr for arr in outlier_pred])
         # Merge is_outlier back into base_df (Polars)
         base_df = base_df.with_columns(
             pl.Series("is_outlier", pd_df["is_outlier"].values)
         )
         results = base_df
-
         # Remove license plates with any temporal gap or position jump
         logging.info("Filtering out taxis with any temporal gap or position jump...")
         flagged_plates = results.filter(
             (pl.col("is_temporal_gap")) | (pl.col("is_position_jump"))
         ).get_column("license_plate").unique().to_list()
+        n_before = results.height
         cleaned_df = (
             results.filter(~pl.col("license_plate").is_in(flagged_plates))
             .drop(["is_temporal_gap", "is_position_jump"])
         )
+        n_after = cleaned_df.height
+        stats.record_filtering("remove_temporal_gap_or_jump", n_before, n_after, "Remove taxis with any temporal gap or position jump")
         logging.info(f"Cleaned DataFrame shape: {cleaned_df.shape}")
         # Validation
         if cleaned_df.is_empty():
@@ -780,6 +788,7 @@ def main():
         step_info["output_path"] = cleaned_points_path
     run_metadata["steps"][step_name] = step_info
     save_metadata()
+    stats.record_step_stats("cleaned_points", cleaned_df)
 
     # --- Step 2: Cleaned with period_id ---
     step_name = "cleaned_with_period_id"
@@ -815,12 +824,23 @@ def main():
     if args.clean or not reuse_cleaned_with_pid:
         # Add period_id and summarize periods
         logging.info("Adding period_id and summarizing periods...")
+        n_before = cleaned_df.height
         period_df = cleaned_df.pipe(add_period_id).pipe(summarize_periods)
         # Remove small periods (fewer than 3 points)
         MIN_PERIOD_POINTS = 3
+        n_before_min_points = period_df.height
         period_df = period_df.filter(pl.col("count_rows") >= MIN_PERIOD_POINTS)
+        n_after_min_points = period_df.height
+        stats.record_filtering("min_period_points", n_before_min_points, n_after_min_points, f"Remove periods with <{MIN_PERIOD_POINTS} points")
+        # Remove periods with NaN SLD ratio
+        n_before_sld_nan = period_df.shape[0]
+        period_df = period_df.filter(~pl.col("sld_ratio").is_nan())
+        n_after_sld_nan = period_df.shape[0]
+        n_filtered_sld_nan = n_before_sld_nan - n_after_sld_nan
+        if n_filtered_sld_nan > 0:
+            logging.info(f"Filtered out {n_filtered_sld_nan} periods with NaN SLD ratio after summarization.")
+        stats.record_filtering("nan_sld_ratio", n_before_sld_nan, n_after_sld_nan, "Remove periods with NaN SLD ratio")
         logging.info(f"Period summary shape: {period_df.shape}")
-
         # Attach period_id (and period time bounds) to cleaned points
         logging.info("Attaching period_id to cleaned points...")
         cleaned_with_period_id = attach_period_id(cleaned_df, period_df)
@@ -835,6 +855,7 @@ def main():
         step_info["output_path"] = cleaned_with_pid_path
     run_metadata["steps"][step_name] = step_info
     save_metadata()
+    stats.record_step_stats("cleaned_with_period_id", cleaned_with_period_id)
 
     # --- Step 3: Period summary with SLD ratio ---
     step_name = "periods_with_sld_ratio"
@@ -904,6 +925,9 @@ def main():
     step_info["output_path"] = periods_sld_path
     run_metadata["steps"][step_name] = step_info
     save_metadata()
+    stats.record_step_stats("periods_with_sld_ratio", period_df)
+    # Record IF and SLD indicator flags and overlaps
+    stats.record_indicator_flags(period_df, ["is_traj_outlier", "is_sld_outlier"])
 
     # After period_df is created and saved as data/periods_with_sld_ratio_{run_id}.parquet
     # 1. Ensure OSM graph
@@ -974,6 +998,10 @@ def main():
     step_info["output_path"] = final_periods_path
     run_metadata["steps"][step_name] = step_info
     save_metadata()
+    # After network outlier flag, load and record all indicator overlaps
+    final_df = pl.read_parquet(final_periods_path)
+    stats.record_step_stats("network_outlier_flag", final_df)
+    stats.record_indicator_flags(final_df, ["is_traj_outlier", "is_sld_outlier", "is_network_outlier"])
 
     # --- Write LAST_RUN_ID file ---
     with open(os.path.join("pipeline_stats", "LAST_RUN_ID"), "w") as f:
@@ -993,6 +1021,11 @@ def main():
         ]
         logging.info(f"Running analysis tool: {' '.join(analysis_cmd)}")
         subprocess.run(analysis_cmd)
+
+    # --- Save pipeline stats ---
+    stats.record_meta("git_commit", commit_hash)
+    stats.record_meta("env_file", env_txt)
+    stats.save()
 
 if __name__ == "__main__":
     main()
