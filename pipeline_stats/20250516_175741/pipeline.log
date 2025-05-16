@@ -1,0 +1,37 @@
+2025-05-16 17:57:42,441 INFO Random seed set to 42
+2025-05-16 17:57:42,911 INFO Saved pip freeze to pipeline_stats/20250516_175741/environment.txt
+2025-05-16 17:57:42,911 INFO Loading filtered_points_in_beijing.parquet...
+2025-05-16 17:57:44,024 INFO Computing IQR-based thresholds for time gaps and speeds...
+2025-05-16 17:57:45,171 INFO Thresholds: time_gap=105.00 sec, speed=146.81 kph
+2025-05-16 17:57:45,171 INFO Computing time, distance, speed, and abnormality flags...
+2025-05-16 17:57:45,172 INFO Collecting base DataFrame (this may take a while)...
+2025-05-16 17:57:56,330 INFO Base DataFrame shape: (12667620, 12)
+2025-05-16 17:57:56,330 INFO Detecting trajectory outliers (Isolation Forest, parallel, reproducible)...
+2025-05-16 18:00:25,050 INFO Filtering out taxis with any temporal gap or position jump...
+2025-05-16 18:00:25,254 INFO Cleaned DataFrame shape: (5378468, 11)
+2025-05-16 18:00:25,254 WARNING Cleaned DataFrame contains nulls.
+2025-05-16 18:00:26,528 INFO Saved Cleaned points to data/cleaned_points_in_beijing_20250516_175741.parquet (shape: (5378468, 11))
+2025-05-16 18:00:27,033 INFO Adding period_id and summarizing periods...
+2025-05-16 18:00:27,344 INFO Period summary shape: (31861, 16)
+2025-05-16 18:00:27,345 INFO Filtered out 6261 periods with NaN SLD ratio after summarization.
+2025-05-16 18:00:27,345 INFO Period summary shape: (25600, 16)
+2025-05-16 18:00:27,345 INFO Attaching period_id to cleaned points...
+2025-05-16 18:00:28,513 INFO Cleaned with period_id shape: (4369809, 14)
+2025-05-16 18:00:29,822 INFO Saved Cleaned points with period_id to data/cleaned_with_period_id_in_beijing_20250516_175741.parquet (shape: (4369809, 14))
+2025-05-16 18:00:29,991 INFO Computing per-period outlier counts...
+2025-05-16 18:00:30,393 INFO Flagging SLD-based outliers...
+2025-05-16 18:00:30,440 INFO Saved Period summary with SLD ratio and outlier flags to data/periods_with_sld_ratio_20250516_175741.parquet (shape: (25127, 20))
+2025-05-16 18:00:30,608 INFO [REUSE] OSM graph is up-to-date: beijing_drive.graphml
+2025-05-16 18:00:30,698 INFO Filtering out 11497 periods with sum_distance < 1.0 km out of 25127 total.
+2025-05-16 18:01:08,422 INFO Loading persistent node cache from network_checkpoints/point_to_node.parquet
+2025-05-16 18:01:08,788 INFO Loaded checkpoint with 13630 completed periods.
+2025-05-16 18:01:08,798 INFO Processing 0 new periods (skipping 13630 already done).
+2025-05-16 18:01:08,846 INFO Computing shortest paths for 0 unique node pairs (batched)...
+2025-05-16 18:01:08,847 INFO Filtering out 1173 periods with failed or degenerate network path computation (NaN or <1km).
+2025-05-16 18:01:08,854 INFO Saved network_shortest_paths statistics to pipeline_stats/20250516_175741/network_shortest_paths_stats_20250516_180108.json
+2025-05-16 18:01:09,030 INFO Saved final results to data/periods_with_network_ratio_20250516_175741.parquet
+2025-05-16 18:01:09,368 INFO Network ratio outlier threshold: 1.68 (Q1=1.01, Q3=1.28, IQR=0.27)
+2025-05-16 18:01:09,369 INFO Found 1603 network outliers out of 12457 valid ratios
+2025-05-16 18:01:09,370 INFO Saved network_outlier_flag statistics to pipeline_stats/20250516_175741/network_outlier_flag_stats_20250516_180109.json
+2025-05-16 18:01:09,503 INFO Pipeline completed: all parquet files written.
+2025-05-16 18:01:09,503 INFO Running analysis tool: /home/matt/Dev/MSc-Thesis-Code/.venv/bin/python pipeline_network_analysis.py --graph beijing_drive.graphml --periods data/periods_with_network_ratio_flagged_20250516_175741.parquet --all

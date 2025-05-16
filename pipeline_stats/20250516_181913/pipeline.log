@@ -1,0 +1,20 @@
+2025-05-16 18:19:14,344 INFO Random seed set to 42
+2025-05-16 18:19:14,822 INFO Saved pip freeze to pipeline_stats/20250516_181913/environment.txt
+2025-05-16 18:19:15,340 INFO [REUSE] Using data/cleaned_points_in_beijing_20250516_175741.parquet for cleaned points step.
+2025-05-16 18:19:15,853 INFO data/cleaned_points_in_beijing_20250516_175741.parquet is up-to-date. Skipping computation.
+2025-05-16 18:19:17,926 INFO [REUSE] Using data/cleaned_with_period_id_in_beijing_20250516_175741.parquet for cleaned_with_period_id step.
+2025-05-16 18:19:18,148 INFO data/cleaned_with_period_id_in_beijing_20250516_175741.parquet is up-to-date. Skipping computation.
+2025-05-16 18:19:19,097 INFO [REUSE] Using data/periods_with_sld_ratio_20250516_175741.parquet for periods_with_sld_ratio step.
+2025-05-16 18:19:19,251 INFO data/periods_with_sld_ratio_20250516_175741.parquet is up-to-date. Skipping computation.
+2025-05-16 18:19:19,533 INFO [REUSE] OSM graph is up-to-date: beijing_drive.graphml
+2025-05-16 18:19:19,629 INFO Filtering out 11497 periods with sum_distance < 1.0 km out of 25127 total.
+2025-05-16 18:19:57,748 INFO Loading persistent node cache from network_checkpoints/point_to_node.parquet
+2025-05-16 18:19:57,937 INFO Loaded checkpoint with 13630 completed periods.
+2025-05-16 18:19:57,942 INFO Processing 0 new periods (skipping 13630 already done).
+2025-05-16 18:19:57,969 INFO Computing shortest paths for 0 unique node pairs (batched)...
+2025-05-16 18:19:57,976 INFO Filtering out 1173 periods with failed or degenerate network path computation (NaN or <1km).
+2025-05-16 18:19:57,984 INFO Saved network_shortest_paths statistics to pipeline_stats/20250516_181913/network_shortest_paths_stats_20250516_181957.json
+2025-05-16 18:19:58,047 INFO Saved final results to data/periods_with_network_ratio_20250516_181913.parquet
+2025-05-16 18:19:58,071 INFO [REUSE] Using data/periods_with_network_ratio_flagged_20250516_175741.parquet for network_ratio_flagged step.
+2025-05-16 18:19:58,100 INFO Pipeline completed: all parquet files written.
+2025-05-16 18:19:58,100 INFO Generating Markdown summary report: /home/matt/Dev/MSc-Thesis-Code/.venv/bin/python pipeline_network_analysis.py --full-analysis --run-id 20250516_181913

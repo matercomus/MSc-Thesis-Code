@@ -1,0 +1,22 @@
+{
+  "run_id": "20250516_175434",
+  "start_time": "2025-05-16T17:54:35.048938",
+  "git_commit": "3478404e87d4b47a4120801a504e2535a74957d6",
+  "env_file": "pipeline_stats/20250516_175434/environment.txt",
+  "steps": {
+    "base_cleaning": {
+      "n_before": 12667620,
+      "n_after": 12667620,
+      "filtered": 0,
+      "pct_filtered": 0.0,
+      "criteria": "Initial cleaning and feature engineering"
+    }
+  },
+  "args": {
+    "clean": false,
+    "clean_step": null,
+    "run_analysis": true,
+    "seed": 42,
+    "reuse_latest": false
+  }
+}

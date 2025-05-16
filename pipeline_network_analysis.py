@@ -8,6 +8,8 @@ import numpy as np
 import json
 import logging
 from pathlib import Path
+import seaborn as sns
+from tabulate import tabulate
 
 
 def get_analysis_dir():
@@ -180,5 +182,235 @@ def main():
         print("--- Node Assignment Check ---")
         check_node_assignment(G, periods, n=10)
 
+# --- BEGIN: Comprehensive Markdown Analysis and Comparison ---
+
+def load_run_stats(run_id):
+    stats_dir = os.path.join("pipeline_stats", run_id)
+    stats_path = os.path.join(stats_dir, "pipeline_stats.json")
+    if not os.path.exists(stats_path):
+        raise FileNotFoundError(f"Stats file not found: {stats_path}")
+    with open(stats_path) as f:
+        stats = json.load(f)
+    return stats, stats_dir
+
+def get_last_run_id():
+    with open(os.path.join("pipeline_stats", "LAST_RUN_ID")) as f:
+        return f.read().strip()
+
+def get_previous_run_id(current_run_id):
+    runs = sorted([d for d in os.listdir("pipeline_stats") if d.isdigit() or ("_" in d and d.replace("_","").isdigit())])
+    if current_run_id in runs:
+        idx = runs.index(current_run_id)
+        if idx > 0:
+            return runs[idx-1]
+    return None
+
+def plot_histogram(data, col, title, xlabel, save_path):
+    plt.figure(figsize=(7,4))
+    sns.histplot(data[col].dropna(), bins=20, kde=True)
+    plt.title(title)
+    plt.xlabel(xlabel)
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+
+def plot_bar(data, col, title, xlabel, ylabel, save_path):
+    plt.figure(figsize=(7,4))
+    sns.barplot(x=data.index, y=data[col])
+    plt.title(title)
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+
+def reused_from_link(reused_from):
+    """Return a Markdown link to the reused run's analysis report if it exists, else just the run id."""
+    if not reused_from:
+        return ""
+    rel_path = f"../../{reused_from}/analysis/analysis_report.md"
+    abs_path = os.path.join("pipeline_stats", reused_from, "analysis", "analysis_report.md")
+    if os.path.exists(abs_path):
+        return f"[{reused_from}]({rel_path})"
+    else:
+        return reused_from
+
+def make_markdown_report(run_id, stats, analysis_dir, plots, compare_stats=None, compare_run_id=None):
+    md = f"# Pipeline Analysis Report\n\n"
+    md += f"**Run ID:** `{run_id}`\n\n"
+    if compare_stats:
+        md += f"**Compared to Run ID:** `{compare_run_id}`\n\n"
+    md += "## Summary Table\n"
+    # Try to load run_metadata.json for step stats
+    meta_path = os.path.join("pipeline_stats", run_id, "run_metadata.json")
+    meta_steps = {}
+    if os.path.exists(meta_path):
+        with open(meta_path) as f:
+            meta = json.load(f)
+            meta_steps = meta.get("steps", {})
+    summary_rows = []
+    first_before = None
+    if meta_steps:
+        for step, step_stats in meta_steps.items():
+            n_before = step_stats.get("n_before")
+            n_after = step_stats.get("n_after")
+            filtered = step_stats.get("filtered")
+            pct_filtered = step_stats.get("pct_filtered")
+            reused = step_stats.get("reused")
+            reused_from = step_stats.get("reused_from")
+            if first_before is None and n_before is not None:
+                first_before = n_before
+            cumulative_ret = (n_after / first_before * 100) if (first_before and n_after is not None) else None
+            reused_from_display = reused_from_link(reused_from) if reused else ""
+            summary_rows.append([
+                step,
+                n_before,
+                n_after,
+                filtered,
+                f"{pct_filtered:.2f}%" if pct_filtered is not None else None,
+                f"{cumulative_ret:.2f}%" if cumulative_ret is not None else None,
+                "Yes" if reused else "No",
+                reused_from_display
+            ])
+        headers = ["Step", "Before", "After", "Filtered", "% Filtered", "Cumulative % Retained", "Reused", "Reused From"]
+    else:
+        filtering = stats.get("filtering", {})
+        for step, filt in filtering.items():
+            n_before = filt.get("before")
+            n_after = filt.get("after")
+            filtered = filt.get("filtered")
+            pct_filtered = filt.get("filtered_pct")
+            if first_before is None and n_before is not None:
+                first_before = n_before
+            cumulative_ret = (n_after / first_before * 100) if (first_before and n_after is not None) else None
+            summary_rows.append([
+                step,
+                n_before,
+                n_after,
+                filtered,
+                f"{pct_filtered:.2f}%" if pct_filtered is not None else None,
+                f"{cumulative_ret:.2f}%" if cumulative_ret is not None else None
+            ])
+        headers = ["Step", "Before", "After", "Filtered", "% Filtered", "Cumulative % Retained"]
+    if summary_rows:
+        md += tabulate(
+            summary_rows,
+            headers=headers,
+            tablefmt="github"
+        ) + "\n\n"
+    # Indicator counts
+    if "indicator_flags" in stats:
+        md += "## Indicator Flag Counts\n"
+        flag_rows = []
+        for flag, count in stats["indicator_flags"].items():
+            flag_rows.append([flag, count])
+        md += tabulate(flag_rows, headers=["Indicator", "Count"], tablefmt="github") + "\n\n"
+    # Overlaps
+    if "indicator_overlaps" in stats:
+        md += "## Indicator Overlaps\n"
+        overlap_rows = []
+        for combo, count in stats["indicator_overlaps"].items():
+            overlap_rows.append([combo, count])
+        md += tabulate(overlap_rows, headers=["Overlap", "Count"], tablefmt="github") + "\n\n"
+    # Node/path stats
+    if "node_assignment" in stats:
+        md += "## Node Assignment Stats\n"
+        node_rows = [[k, v] for k, v in stats["node_assignment"].items()]
+        md += tabulate(node_rows, headers=["Metric", "Value"], tablefmt="github") + "\n\n"
+    if "path_computation" in stats:
+        md += "## Path Computation Stats\n"
+        path_rows = [[k, v] for k, v in stats["path_computation"].items()]
+        md += tabulate(path_rows, headers=["Metric", "Value"], tablefmt="github") + "\n\n"
+    # Plots
+    for desc, fname in plots:
+        md += f"### {desc}\n\n![]({fname})\n\n"
+    # Comparison
+    if compare_stats:
+        md += "# Comparison to Previous Run\n\n"
+        # Compare indicator flags
+        if "indicator_flags" in stats and "indicator_flags" in compare_stats:
+            md += "## Indicator Flag Count Comparison\n"
+            comp_rows = []
+            for flag in set(stats["indicator_flags"]).union(compare_stats["indicator_flags"]):
+                v1 = stats["indicator_flags"].get(flag, 0)
+                v2 = compare_stats["indicator_flags"].get(flag, 0)
+                comp_rows.append([flag, v1, v2, v1-v2])
+            md += tabulate(comp_rows, headers=["Indicator", f"{run_id}", f"{compare_run_id}", "Diff"], tablefmt="github") + "\n\n"
+        # Compare overlaps
+        if "indicator_overlaps" in stats and "indicator_overlaps" in compare_stats:
+            md += "## Indicator Overlap Comparison\n"
+            comp_rows = []
+            for combo in set(stats["indicator_overlaps"]).union(compare_stats["indicator_overlaps"]):
+                v1 = stats["indicator_overlaps"].get(combo, 0)
+                v2 = compare_stats["indicator_overlaps"].get(combo, 0)
+                if isinstance(v1, dict) or isinstance(v2, dict):
+                    comp_rows.append([combo, str(v1), str(v2), "N/A"])
+                else:
+                    comp_rows.append([combo, v1, v2, v1-v2])
+            md += tabulate(comp_rows, headers=["Overlap", f"{run_id}", f"{compare_run_id}", "Diff"], tablefmt="github") + "\n\n"
+    # Save
+    md_path = os.path.join(analysis_dir, "analysis_report.md")
+    with open(md_path, "w") as f:
+        f.write(md)
+    print(f"Saved Markdown report to {md_path}")
+
+# --- CLI Entrypoint for Full Analysis ---
+def run_full_analysis(run_id=None, compare_to=None):
+    if run_id is None:
+        run_id = get_last_run_id()
+    stats, stats_dir = load_run_stats(run_id)
+    analysis_dir = os.path.join(stats_dir, "analysis")
+    os.makedirs(analysis_dir, exist_ok=True)
+    # Load main periods file for histograms
+    periods_path = os.path.join("data", f"periods_with_network_ratio_flagged_{run_id}.parquet")
+    if not os.path.exists(periods_path):
+        # Try to find in run_metadata
+        meta_path = os.path.join(stats_dir, "run_metadata.json")
+        if os.path.exists(meta_path):
+            with open(meta_path) as f:
+                meta = json.load(f)
+            step = meta.get("steps", {}).get("network_outlier_flag", {})
+            periods_path = step.get("output_path", periods_path)
+    periods = pd.read_parquet(periods_path)
+    plots = []
+    # Histograms
+    for col, desc, xlabel in [
+        ("route_deviation_ratio", "Route Deviation Ratio Histogram", "Route Deviation Ratio"),
+        ("network_shortest_distance", "Network Shortest Distance Histogram", "Network Shortest Distance (km)")
+    ]:
+        fname = f"{col}_hist.png"
+        save_path = os.path.join(analysis_dir, fname)
+        plot_histogram(periods, col, desc, xlabel, save_path)
+        plots.append((desc, fname))
+    # Bar plot for indicator flags
+    if "indicator_flags" in stats:
+        flag_df = pd.DataFrame(list(stats["indicator_flags"].items()), columns=["flag", "count"]).set_index("flag")
+        fname = "indicator_flags_bar.png"
+        save_path = os.path.join(analysis_dir, fname)
+        plot_bar(flag_df, "count", "Indicator Flag Counts", "Flag", "Count", save_path)
+        plots.append(("Indicator Flag Counts", fname))
+    # Comparison
+    compare_stats = None
+    compare_run_id = None
+    if compare_to:
+        compare_stats, _ = load_run_stats(compare_to)
+        compare_run_id = compare_to
+    elif compare_to is not False:
+        prev_run = get_previous_run_id(run_id)
+        if prev_run:
+            compare_stats, _ = load_run_stats(prev_run)
+            compare_run_id = prev_run
+    make_markdown_report(run_id, stats, analysis_dir, plots, compare_stats, compare_run_id)
+
+# Add CLI for full analysis
 if __name__ == "__main__":
-    main() 
+    import sys
+    if "--full-analysis" in sys.argv:
+        sys.argv.remove("--full-analysis")  # Remove before parsing
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--run-id", type=str, default=None, help="Run ID to analyze (default: last run)")
+        parser.add_argument("--compare-to", type=str, default=None, help="Run ID to compare to (default: previous run)")
+        args = parser.parse_args()
+        run_full_analysis(run_id=args.run_id, compare_to=args.compare_to)
+    else:
+        main() 

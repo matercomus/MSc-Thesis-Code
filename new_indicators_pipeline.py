@@ -728,6 +728,42 @@ def find_latest_output(pattern):
     files = sorted(files, key=lambda x: x[1], reverse=True)
     return files[0][0] if files else None
 
+# Helper to extract run_id from a reused_from path
+def extract_run_id_from_path(path):
+    if not path:
+        return None
+    m = re.search(r'_(\d{8}_\d{6})', str(path))
+    return m.group(1) if m else None
+
+# Helper to copy stats fields from source run's metadata
+def copy_stats_from_source(step_name, reused_from, depth=0):
+    indent = '  ' * depth
+    src_run_id = extract_run_id_from_path(reused_from)
+    print(f"{indent}[DEBUG] copy_stats_from_source: step={step_name}, reused_from={reused_from}, extracted_run_id={src_run_id}")
+    if not src_run_id:
+        print(f"{indent}[DEBUG] No run id extracted from reused_from path.")
+        return {}
+    src_meta_path = os.path.join("pipeline_stats", src_run_id, "run_metadata.json")
+    print(f"{indent}[DEBUG] Looking for source metadata at: {src_meta_path}")
+    if not os.path.exists(src_meta_path):
+        print(f"{indent}[DEBUG] Source metadata file does not exist.")
+        return {}
+    with open(src_meta_path) as f:
+        src_meta = json.load(f)
+    src_step = src_meta.get("steps", {}).get(step_name, {})
+    fields = ["n_before", "n_after", "filtered", "pct_filtered", "criteria"]
+    found = {k: src_step[k] for k in fields if k in src_step}
+    print(f"{indent}[DEBUG] Found fields: {found}")
+    # If not all fields found and this step is also reused, recurse
+    if (len(found) < len(fields)) and src_step.get("reused") and src_step.get("reused_from") and depth < 10:
+        print(f"{indent}[DEBUG] Not all fields found, recursing to next reused_from: {src_step.get('reused_from')}")
+        next_found = copy_stats_from_source(step_name, src_step.get("reused_from"), depth+1)
+        # Merge, prefer values from next_found if not present in found
+        for k in fields:
+            if k not in found and k in next_found:
+                found[k] = next_found[k]
+    return found
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--clean", action="store_true", help="Remove all checkpoints, meta, and intermediate outputs before running pipeline.")
@@ -834,9 +870,17 @@ def main():
             cleaned_points_meta = cleaned_points_path + ".meta.json"
             reuse_cleaned_points = True
             reused_from = latest
+    n_before_cleaned_points = None
+    n_after_cleaned_points = None
     if is_up_to_date(cleaned_points_path, input_paths):
         logging.info(f"{cleaned_points_path} is up-to-date. Skipping computation.")
         cleaned_df = pl.read_parquet(cleaned_points_path)
+        n_after_cleaned_points = cleaned_df.height
+        # Try to infer n_before from previous filtering step or from filtered_points_in_beijing.parquet
+        try:
+            n_before_cleaned_points = pl.read_parquet(filtered_points_path).height
+        except Exception:
+            n_before_cleaned_points = n_after_cleaned_points
         if cleaned_df.is_empty():
             warning = "Reused cleaned points is empty. Recomputing."
             logging.warning(warning)
@@ -848,67 +892,17 @@ def main():
             step_info["status"] = "reused"
             step_info["reused_from"] = reused_from
             step_info["output_path"] = cleaned_points_path
-    if args.clean or not reuse_cleaned_points:
-        # Load filtered points
-        logging.info("Loading filtered_points_in_beijing.parquet...")
-        lazy_df = pl.scan_parquet(filtered_points_path)
-        n_before = lazy_df.collect().height
-        # Compute robust thresholds using IQR on occupied trips only
-        logging.info("Computing IQR-based thresholds for time gaps and speeds...")
-        time_gap_th, speed_th = compute_iqr_thresholds(lazy_df)
-        logging.info(f"Thresholds: time_gap={time_gap_th:.2f} sec, speed={speed_th:.2f} kph")
-        # Compute base indicators and abnormality flags
-        logging.info("Computing time, distance, speed, and abnormality flags...")
-        base_df = (
-            lazy_df.sort("license_plate", "timestamp")
-            .pipe(add_time_distance_calcs)
-            .pipe(add_implied_speed)
-            .pipe(add_abnormality_flags, time_gap_th, speed_th)
-            .pipe(select_final_columns)
-        )
-        logging.info("Collecting base DataFrame (this may take a while)...")
-        base_df = base_df.collect()
-        n_after = base_df.height
-        stats.record_filtering("base_cleaning", n_before, n_after, "Initial cleaning and feature engineering")
-        logging.info(f"Base DataFrame shape: {base_df.shape}")
-        # Detect outliers using Isolation Forest (parallel, reproducible)
-        logging.info("Detecting trajectory outliers (Isolation Forest, parallel, reproducible)...")
-        needed_cols = ["license_plate", "timestamp", "implied_speed_kph", "time_diff_seconds", "latitude", "longitude"]
-        pd_df = base_df.select(needed_cols).to_pandas()
-        tqdm.pandas(desc="Outlier detection")
-        # Show progress bar for outlier detection
-        outlier_pred = []
-        for chunk in tqdm(np.array_split(pd_df, max(1, len(pd_df)//100000)), desc="Detecting outliers", total=max(1, len(pd_df)//100000)):
-            outlier_pred.append(detect_outliers_pd(chunk, n_jobs=-1, random_state=seed))
-        pd_df["is_outlier"] = np.concatenate([arr.values if hasattr(arr, 'values') else arr for arr in outlier_pred])
-        # Merge is_outlier back into base_df (Polars)
-        base_df = base_df.with_columns(
-            pl.Series("is_outlier", pd_df["is_outlier"].values)
-        )
-        results = base_df
-        # Remove license plates with any temporal gap or position jump
-        logging.info("Filtering out taxis with any temporal gap or position jump...")
-        flagged_plates = results.filter(
-            (pl.col("is_temporal_gap")) | (pl.col("is_position_jump"))
-        ).get_column("license_plate").unique().to_list()
-        n_before = results.height
-        cleaned_df = (
-            results.filter(~pl.col("license_plate").is_in(flagged_plates))
-            .drop(["is_temporal_gap", "is_position_jump"])
-        )
-        n_after = cleaned_df.height
-        stats.record_filtering("remove_temporal_gap_or_jump", n_before, n_after, "Remove taxis with any temporal gap or position jump")
-        logging.info(f"Cleaned DataFrame shape: {cleaned_df.shape}")
-        # Validation
-        if cleaned_df.is_empty():
-            logging.error("Cleaned DataFrame is empty after filtering! Aborting.")
-            raise RuntimeError("Cleaned DataFrame is empty.")
-        if cleaned_df.null_count().to_numpy().sum() > 0:
-            logging.warning("Cleaned DataFrame contains nulls.")
-        save_parquet(cleaned_df, cleaned_points_path, label="Cleaned points")
-        write_meta(cleaned_points_meta, {"filtered_points_hash": file_hash(filtered_points_path), "seed": seed})
-        step_info["status"] = "computed"
-        step_info["output_path"] = cleaned_points_path
+            step_info["reused"] = True
+            # Copy stats fields from source if available
+            step_info.update(copy_stats_from_source(step_name, reused_from))
+        run_metadata["steps"].setdefault(step_name, {})
+        run_metadata["steps"][step_name].update(step_info)
+        save_metadata()
+    else:
+        # Always update stats even if reused
+        run_metadata["steps"].setdefault(step_name, {})
+        run_metadata["steps"][step_name].update(step_info)
+        save_metadata()
     run_metadata["steps"][step_name] = step_info
     save_metadata()
     stats.record_step_stats("cleaned_points", cleaned_df)
@@ -930,9 +924,17 @@ def main():
             cleaned_with_pid_meta = cleaned_with_pid_path + ".meta.json"
             reuse_cleaned_with_pid = True
             reused_from = latest
+    n_before_cleaned_with_pid = None
+    n_after_cleaned_with_pid = None
     if is_up_to_date(cleaned_with_pid_path, input_paths):
         logging.info(f"{cleaned_with_pid_path} is up-to-date. Skipping computation.")
         cleaned_with_period_id = pl.read_parquet(cleaned_with_pid_path)
+        n_after_cleaned_with_pid = cleaned_with_period_id.height
+        # Try to infer n_before from cleaned_points
+        try:
+            n_before_cleaned_with_pid = pl.read_parquet(cleaned_points_path).height
+        except Exception:
+            n_before_cleaned_with_pid = n_after_cleaned_with_pid
         if cleaned_with_period_id.is_empty():
             warning = "Reused cleaned_with_period_id is empty. Recomputing."
             logging.warning(warning)
@@ -944,38 +946,17 @@ def main():
             step_info["status"] = "reused"
             step_info["reused_from"] = reused_from
             step_info["output_path"] = cleaned_with_pid_path
-    if args.clean or not reuse_cleaned_with_pid:
-        # Add period_id and summarize periods
-        logging.info("Adding period_id and summarizing periods...")
-        n_before = cleaned_df.height
-        period_df = cleaned_df.pipe(add_period_id).pipe(summarize_periods)
-        # Remove small periods (fewer than 3 points)
-        MIN_PERIOD_POINTS = 3
-        n_before_min_points = period_df.height
-        period_df = period_df.filter(pl.col("count_rows") >= MIN_PERIOD_POINTS)
-        n_after_min_points = period_df.height
-        stats.record_filtering("min_period_points", n_before_min_points, n_after_min_points, f"Remove periods with <{MIN_PERIOD_POINTS} points")
-        # Remove periods with NaN SLD ratio
-        n_before_sld_nan = period_df.shape[0]
-        period_df = period_df.filter(~pl.col("sld_ratio").is_nan())
-        n_after_sld_nan = period_df.shape[0]
-        n_filtered_sld_nan = n_before_sld_nan - n_after_sld_nan
-        if n_filtered_sld_nan > 0:
-            logging.info(f"Filtered out {n_filtered_sld_nan} periods with NaN SLD ratio after summarization.")
-        stats.record_filtering("nan_sld_ratio", n_before_sld_nan, n_after_sld_nan, "Remove periods with NaN SLD ratio")
-        logging.info(f"Period summary shape: {period_df.shape}")
-        # Attach period_id (and period time bounds) to cleaned points
-        logging.info("Attaching period_id to cleaned points...")
-        cleaned_with_period_id = attach_period_id(cleaned_df, period_df)
-        logging.info(f"Cleaned with period_id shape: {cleaned_with_period_id.shape}")
-        # Validation
-        if cleaned_with_period_id.is_empty():
-            logging.error("Cleaned with period_id DataFrame is empty! Aborting.")
-            raise RuntimeError("Cleaned with period_id DataFrame is empty.")
-        save_parquet(cleaned_with_period_id, cleaned_with_pid_path, label="Cleaned points with period_id")
-        write_meta(cleaned_with_pid_meta, {"cleaned_points_hash": file_hash(cleaned_points_path), "seed": seed})
-        step_info["status"] = "computed"
-        step_info["output_path"] = cleaned_with_pid_path
+            step_info["reused"] = True
+            # Copy stats fields from source if available
+            step_info.update(copy_stats_from_source(step_name, reused_from))
+        run_metadata["steps"].setdefault(step_name, {})
+        run_metadata["steps"][step_name].update(step_info)
+        save_metadata()
+    else:
+        # Always update stats even if reused
+        run_metadata["steps"].setdefault(step_name, {})
+        run_metadata["steps"][step_name].update(step_info)
+        save_metadata()
     run_metadata["steps"][step_name] = step_info
     save_metadata()
     stats.record_step_stats("cleaned_with_period_id", cleaned_with_period_id)
@@ -997,9 +978,17 @@ def main():
             periods_sld_meta = periods_sld_path + ".meta.json"
             reuse_periods_sld = True
             reused_from = latest
+    n_before_periods_sld = None
+    n_after_periods_sld = None
     if is_up_to_date(periods_sld_path, input_paths):
         logging.info(f"{periods_sld_path} is up-to-date. Skipping computation.")
         period_df = pl.read_parquet(periods_sld_path)
+        n_after_periods_sld = period_df.height
+        # Try to infer n_before from cleaned_with_period_id
+        try:
+            n_before_periods_sld = pl.read_parquet(cleaned_with_pid_path).height
+        except Exception:
+            n_before_periods_sld = n_after_periods_sld
         if period_df.is_empty():
             warning = "Reused periods_with_sld_ratio is empty. Recomputing."
             logging.warning(warning)
@@ -1011,41 +1000,17 @@ def main():
             step_info["status"] = "reused"
             step_info["reused_from"] = reused_from
             step_info["output_path"] = periods_sld_path
-    if args.clean or not reuse_periods_sld:
-        # Compute per-period outlier counts (Isolation Forest)
-        logging.info("Computing per-period outlier counts...")
-        outlier_stats = (
-            cleaned_with_period_id.group_by(["license_plate", "period_id"])
-            .agg((pl.col("is_outlier") == -1).sum().alias("traj_outlier_count"))
-        )
-        # Join outlier stats into period summary and compute ratio and flag
-        period_df = (
-            cleaned_with_period_id.pipe(add_period_id).pipe(summarize_periods)
-            .join(outlier_stats, on=["license_plate", "period_id"], how="left")
-            .with_columns([
-                pl.col("traj_outlier_count").fill_null(0),
-                (pl.col("traj_outlier_count") / pl.col("count_rows")).fill_null(0.0).alias("traj_outlier_ratio"),
-                (pl.col("traj_outlier_count") > 0).alias("is_traj_outlier"),
-            ])
-        )
-        # Flag SLD-based outliers using IQR threshold
-        logging.info("Flagging SLD-based outliers...")
-        sld_th = compute_generic_iqr_threshold(period_df.lazy(), "sld_ratio")
-        period_df = period_df.with_columns(
-            (pl.col("sld_ratio") > sld_th).alias("is_sld_outlier")
-        )
-        # Validation
-        if period_df.is_empty():
-            logging.error("Period summary DataFrame is empty! Aborting.")
-            raise RuntimeError("Period summary DataFrame is empty.")
-        save_parquet(period_df, periods_sld_path, label="Period summary with SLD ratio and outlier flags")
-        write_meta(periods_sld_meta, {"cleaned_with_pid_hash": file_hash(cleaned_with_pid_path), "seed": seed})
-        step_info["status"] = "computed"
-        step_info["output_path"] = periods_sld_path
+            step_info["reused"] = True
+            # Copy stats fields from source if available
+            step_info.update(copy_stats_from_source(step_name, reused_from))
+        run_metadata["steps"].setdefault(step_name, {})
+        run_metadata["steps"][step_name].update(step_info)
+        save_metadata()
     else:
-        step_info["status"] = "reused"
-        step_info["reused_from"] = reused_from
-    step_info["output_path"] = periods_sld_path
+        # Always update stats even if reused
+        run_metadata["steps"].setdefault(step_name, {})
+        run_metadata["steps"][step_name].update(step_info)
+        save_metadata()
     run_metadata["steps"][step_name] = step_info
     save_metadata()
     stats.record_step_stats("periods_with_sld_ratio", period_df)
@@ -1113,12 +1078,35 @@ def main():
         )
     step_name = "network_outlier_flag"
     step_info = {"timestamp": datetime.now().isoformat()}
-    if reuse_final_periods:
+    n_before_network_outlier_flag = None
+    n_after_network_outlier_flag = None
+    if is_up_to_date(final_periods_path, {"network_ratio_hash": network_ratio_path}):
+        try:
+            n_after_network_outlier_flag = pl.read_parquet(final_periods_path).height
+        except Exception:
+            n_after_network_outlier_flag = None
+        try:
+            n_before_network_outlier_flag = pl.read_parquet(periods_sld_path).height
+        except Exception:
+            n_before_network_outlier_flag = n_after_network_outlier_flag
         step_info["status"] = "reused"
+        step_info["output_path"] = final_periods_path
+        step_info["reused"] = True
         step_info["reused_from"] = reused_from
+        # Copy stats fields from source if available
+        step_info.update(copy_stats_from_source(step_name, reused_from))
     else:
+        n_before = period_df.height
+        n_after = pl.read_parquet(final_periods_path).height
+        n_before_network_outlier_flag = n_before
+        n_after_network_outlier_flag = n_after
         step_info["status"] = "computed"
-    step_info["output_path"] = final_periods_path
+        step_info["output_path"] = final_periods_path
+        step_info["reused"] = False
+        step_info["reused_from"] = None
+    run_metadata["steps"].setdefault(step_name, {})
+    run_metadata["steps"][step_name].update(step_info)
+    save_metadata()
     run_metadata["steps"][step_name] = step_info
     save_metadata()
     # After network outlier flag, load and record all indicator overlaps
@@ -1134,21 +1122,30 @@ def main():
     print(f"\nPipeline run complete. See {run_stats_dir} for logs, metadata, and outputs.")
     print(f"  - Log: {log_path}\n  - Metadata: {os.path.join(run_stats_dir, 'run_metadata.json')}\n  - Git commit: {os.path.join(run_stats_dir, 'git_commit.txt')}\n  - Environment: {env_txt}")
 
+    # --- Save pipeline stats ---
+    stats.record_meta("git_commit", commit_hash)
+    stats.record_meta("env_file", env_txt)
+    stats.save()
+
     # --- Optionally run analysis tool ---
+    # Always generate Markdown summary report for this run
+    analysis_cmd = [
+        sys.executable, "pipeline_network_analysis.py",
+        "--full-analysis",
+        "--run-id", run_id
+    ]
+    logging.info(f"Generating Markdown summary report: {' '.join(analysis_cmd)}")
+    subprocess.run(analysis_cmd)
+    # If --run-analysis is set, also run the full CLI analysis tool with all options
     if args.run_analysis:
-        analysis_cmd = [
+        extra_cmd = [
             sys.executable, "pipeline_network_analysis.py",
             "--graph", "beijing_drive.graphml",
             "--periods", final_periods_path,
             "--all"
         ]
-        logging.info(f"Running analysis tool: {' '.join(analysis_cmd)}")
-        subprocess.run(analysis_cmd)
-
-    # --- Save pipeline stats ---
-    stats.record_meta("git_commit", commit_hash)
-    stats.record_meta("env_file", env_txt)
-    stats.save()
+        logging.info(f"Running extra analysis tool: {' '.join(extra_cmd)}")
+        subprocess.run(extra_cmd)
 
 if __name__ == "__main__":
     main()
