@@ -182,7 +182,7 @@ def main():
                 del st.session_state.period_id
         else:
             # Handle privacy mode transition
-            new_lp = handle_license_plate_state(privacy_mode, lp_list, display_lp_list, current_lp)
+        new_lp = handle_license_plate_state(privacy_mode, lp_list, display_lp_list, current_lp)
             if new_lp != current_lp:
                 st.session_state.lp = new_lp
     else:
@@ -190,15 +190,15 @@ def main():
         st.session_state.lp = display_lp_list[0] if display_lp_list else None
     
     if not st.session_state.lp:
-        st.warning("No license plates available for the current filters.")
-        return
+            st.warning("No license plates available for the current filters.")
+            return
     
     # Display license plate selector
     st.sidebar.selectbox("Select license plate", display_lp_list, key="lp")
     
     # Get the original license plate from the display value
     try:
-        lp = lp_list[display_lp_list.index(st.session_state.lp)]
+    lp = lp_list[display_lp_list.index(st.session_state.lp)]
     except (ValueError, IndexError):
         st.error("Selected license plate no longer available with current filters.")
         return
@@ -240,7 +240,7 @@ def main():
     
     # Display trajectory header
     n_periods = len(period_ids)
-    sel_idx = period_ids.index(period_id)
+        sel_idx = period_ids.index(period_id)
     
     if privacy_mode:
         st.markdown(f"**Trajectory: *** | Period: {period_id} ({sel_idx+1}/{n_periods})**")

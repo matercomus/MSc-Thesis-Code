@@ -146,180 +146,54 @@ def compute_network_shortest_paths_batched(
     run_id=None,
     node_cache_batch_size=5000,
     node_cache_num_workers=4,
-    output_dir="pipeline_stats"
+    output_dir="pipeline_stats",
+    clean_mode=False
 ):
     """
     Compute network shortest paths and save stats to output_dir.
     If output is up-to-date, recompute stats from file and save stats file.
     On reuse, if a previous stats file exists, merge in detailed stats.
     """
-    # Setup logging
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     logger = logging.getLogger("network_shortest_path")
     os.makedirs(checkpoint_dir, exist_ok=True)
 
-    input_paths = {"periods_sld_hash": periods_path, "osm_graph_hash": osm_graph_path}
-    stats_file = None
-    if run_id is not None:
-        run_dir = os.path.join(output_dir, run_id)
-        os.makedirs(run_dir, exist_ok=True)
-        # Find the latest stats file for this run/step
-        stats_files = sorted(glob.glob(os.path.join(run_dir, "network_shortest_paths_*.json")), reverse=True)
-        if stats_files:
-            stats_file = stats_files[0]
-    if is_up_to_date(output_path, input_paths):
-        logger.info(f"[REUSE] {output_path} is up-to-date. Recomputing stats only.")
-        final_df = pd.read_parquet(output_path)
-        # Recompute stats from file
-        stats = {
-            "total_periods": len(final_df),
-            "graph_info": {
-                "nodes": None,
-                "edges": None,
-            },
-            "node_assignment": {
-                "total_points": None,
-                "successful_assignments": None,
-                "failed_assignments": None,
-            },
-            "path_computation": {
-                "total_pairs": None,
-                "successful_paths": None,
-                "failed_paths": None,
-                "same_node_pairs": None,
-            },
-            "distance_stats": {
-                "min": float(final_df['network_shortest_distance'].min()) if 'network_shortest_distance' in final_df else None,
-                "max": float(final_df['network_shortest_distance'].max()) if 'network_shortest_distance' in final_df else None,
-                "mean": float(final_df['network_shortest_distance'].mean()) if 'network_shortest_distance' in final_df else None,
-                "median": float(final_df['network_shortest_distance'].median()) if 'network_shortest_distance' in final_df else None,
-            },
-            "ratio_stats": {
-                "min": float(final_df['route_deviation_ratio'].min()) if 'route_deviation_ratio' in final_df else None,
-                "max": float(final_df['route_deviation_ratio'].max()) if 'route_deviation_ratio' in final_df else None,
-                "mean": float(final_df['route_deviation_ratio'].mean()) if 'route_deviation_ratio' in final_df else None,
-                "median": float(final_df['route_deviation_ratio'].median()) if 'route_deviation_ratio' in final_df else None,
-                "nan_count": int(final_df['route_deviation_ratio'].isna().sum()) if 'route_deviation_ratio' in final_df else None,
-            }
-        }
-        # If previous stats file exists, merge in detailed stats
-        if stats_file is not None:
-            try:
-                with open(stats_file) as f:
-                    prev_stats = json.load(f)
-                # Merge: keep detailed stats from prev_stats if present
-                for key in ["graph_info", "node_assignment", "path_computation"]:
-                    if key in prev_stats and any(v not in (None, 0) for v in prev_stats.get(key, {}).values()):
-                        stats[key] = prev_stats[key]
-            except Exception as e:
-                logger.warning(f"Could not load previous stats file {stats_file}: {e}")
-        # If node assignment/path computation stats are missing or zero, try to recompute from sidecar files
-        try:
-            if (not stats["node_assignment"]["total_points"] or not stats["path_computation"]["total_pairs"]):
-                # Try to load node assignment info
-                if run_id:
-                    node_assignment_path = os.path.join(output_dir, run_id, f"node_assignment_{run_id}.parquet")
-                    node_pairs_path = os.path.join(output_dir, run_id, f"node_pairs_{run_id}.parquet")
-                else:
-                    node_assignment_path = "node_assignment.parquet"
-                    node_pairs_path = "node_pairs.parquet"
-                if os.path.exists(node_assignment_path):
-                    node_df = pd.read_parquet(node_assignment_path)
-                    total_points = len(node_df)
-                    successful_assignments = node_df["node"].notna().sum()
-                    failed_assignments = total_points - successful_assignments
-                    stats["node_assignment"].update({
-                        "total_points": total_points,
-                        "successful_assignments": successful_assignments,
-                        "failed_assignments": failed_assignments,
-                        "success_pct": successful_assignments / total_points if total_points else None,
-                        "fail_pct": failed_assignments / total_points if total_points else None,
-                    })
-                if os.path.exists(node_pairs_path):
-                    node_pairs_df = pd.read_parquet(node_pairs_path)
-                    total_pairs = len(node_pairs_df)
-                    successful_paths = node_pairs_df["distance_km"].notna().sum()
-                    failed_paths = node_pairs_df["distance_km"].isna().sum()
-                    same_node_pairs = (node_pairs_df["start_node"] == node_pairs_df["end_node"]).sum()
-                    path_lengths = node_pairs_df["distance_km"].dropna().values
-                    stats["path_computation"].update({
-                        "total_pairs": total_pairs,
-                        "successful_paths": int(successful_paths),
-                        "failed_paths": int(failed_paths),
-                        "same_node_pairs": int(same_node_pairs),
-                        "success_pct": successful_paths / total_pairs if total_pairs else None,
-                        "fail_pct": failed_paths / total_pairs if total_pairs else None,
-                        "same_node_pct": same_node_pairs / total_pairs if total_pairs else None,
-                    })
-                    if len(path_lengths) > 0:
-                        arr = np.array(path_lengths)
-                        stats["path_computation"].update({
-                            "length_min": float(np.min(arr)),
-                            "length_max": float(np.max(arr)),
-                            "length_mean": float(np.mean(arr)),
-                            "length_median": float(np.median(arr)),
-                            "length_std": float(np.std(arr)),
-                            "length_percentiles": {p: float(np.percentile(arr, p)) for p in [5, 25, 50, 75, 95]},
-                            "length_hist": np.histogram(arr, bins=10)[0].tolist(),
-                            "length_bin_edges": np.histogram(arr, bins=10)[1].tolist(),
-                        })
-        except Exception as e:
-            logger.warning(f"Could not recompute node assignment/path computation stats from sidecar files: {e}")
-        if run_id is not None:
-            save_step_stats("network_shortest_paths", stats, run_id, output_dir=output_dir)
-        else:
-            save_step_stats("network_shortest_paths", stats, "default", output_dir=output_dir)
-        return final_df
-
     # Load periods
     periods_df = pd.read_parquet(periods_path)
-
-    # --- FILTER OUT SHORT PERIODS (<1km) ---
-    n_total_periods = len(periods_df)
-    short_periods_mask = periods_df['sum_distance'] < 1.0
-    n_short_periods = short_periods_mask.sum()
-    if n_short_periods > 0:
-        logging.info(f"Filtering out {n_short_periods} periods with sum_distance < 1.0 km out of {n_total_periods} total.")
-    periods_df = periods_df[~short_periods_mask].copy()
-    n_after_short_filter = len(periods_df)
-
     G = ox.load_graphml(osm_graph_path)
-    
-    # --- Persistent node cache logic (vectorized, batched, parallel) ---
+
+    # --- Node cache handling ---
     node_cache_path = os.path.join(checkpoint_dir, "point_to_node.parquet")
     node_cache_meta = node_cache_path + ".meta.json"
     periods_hash = file_hash(periods_path)
     graph_hash = file_hash(osm_graph_path)
-    cache_valid = False
-    if os.path.exists(node_cache_path) and os.path.exists(node_cache_meta):
-        with open(node_cache_meta) as f:
-            meta = json.load(f)
-        if meta.get("periods_hash") == periods_hash and meta.get("graph_hash") == graph_hash:
-            cache_valid = True
+    
+    if clean_mode:
+        logger.info("[CLEAN] Skipping node cache in clean mode")
+        cache_valid = False
+    else:
+        cache_valid = os.path.exists(node_cache_path) and os.path.exists(node_cache_meta)
+        if cache_valid:
+            with open(node_cache_meta) as f:
+                meta = json.load(f)
+            cache_valid = meta.get("periods_hash") == periods_hash and meta.get("graph_hash") == graph_hash
+
     if cache_valid:
-        logger.info(f"Loading persistent node cache from {node_cache_path}")
+        logger.info(f"[REUSE] Loading node cache from {node_cache_path}")
         node_df = pd.read_parquet(node_cache_path)
         point_to_node = {(row.lat, row.lon): row.node for row in node_df.itertuples(index=False)}
     else:
-        logger.info("Node cache is invalid or missing; rebuilding node cache for current graph and periods.")
-        # Precompute/caching nearest nodes for all unique points (vectorized, batched, parallel)
+        logger.info("[COMPUTE] Building node cache from scratch")
+        # Get unique points
         all_points = list(set(
             list(zip(periods_df['start_latitude'], periods_df['start_longitude'])) +
             list(zip(periods_df['end_latitude'], periods_df['end_longitude']))
         ))
-        logger.info(f"Caching nearest OSM nodes for {len(all_points)} unique points (batched, parallel)...")
+        logger.info(f"Processing {len(all_points)} unique points in {node_cache_batch_size} point batches")
+        
         point_to_node = {}
         node_rows = []
-        def process_batch(batch):
-            lats, lons = zip(*batch)
-            try:
-                nodes = ox.nearest_nodes(G, X=lons, Y=lats)
-                return list(zip(batch, nodes))
-            except Exception as e:
-                logger.warning(f"Failed batch: {e}")
-                # Mark all as None
-                return list(zip(batch, [None]*len(batch)))
-        # Split into batches
+        
+        # Process in batches
         batches = [all_points[i:i+node_cache_batch_size] for i in range(0, len(all_points), node_cache_batch_size)]
         with ThreadPoolExecutor(max_workers=node_cache_num_workers) as executor:
             futures = {executor.submit(process_batch, batch): batch for batch in batches}
@@ -329,39 +203,37 @@ def compute_network_shortest_paths_batched(
                     lat, lon = latlon
                     point_to_node[(lat, lon)] = node
                     node_rows.append({"lat": lat, "lon": lon, "node": node})
-        # Save cache
-        node_df = pd.DataFrame(node_rows)
-        node_df.to_parquet(node_cache_path)
-        with open(node_cache_meta, "w") as f:
-            json.dump({"periods_hash": periods_hash, "graph_hash": graph_hash}, f)
-        logger.info(f"Saved persistent node cache to {node_cache_path}")
-    # Save node assignment info for reproducibility
+        
+        # Save cache unless in clean mode
+        if not clean_mode:
+            node_df = pd.DataFrame(node_rows)
+            node_df.to_parquet(node_cache_path)
+            with open(node_cache_meta, "w") as f:
+                json.dump({"periods_hash": periods_hash, "graph_hash": graph_hash}, f)
+            logger.info(f"[SAVE] Node cache written to {node_cache_path}")
+
+    # Save node assignments for reproducibility
     node_assignment_path = os.path.join(output_dir, run_id, f"node_assignment_{run_id}.parquet") if run_id else "node_assignment.parquet"
+    node_df = pd.DataFrame(node_rows)
     node_df.to_parquet(node_assignment_path)
+    logger.info(f"[SAVE] Node assignments saved to {node_assignment_path}")
 
     # --- Node assignment stats ---
-    all_points = list(set(
-        list(zip(periods_df['start_latitude'], periods_df['start_longitude'])) +
-        list(zip(periods_df['end_latitude'], periods_df['end_longitude']))
-    ))
     total_points = len(all_points)
     assigned_nodes = [point_to_node.get((lat, lon)) for (lat, lon) in all_points]
     successful_assignments = sum(n is not None for n in assigned_nodes)
     failed_assignments = total_points - successful_assignments
+    
+    # More detailed stats
     stats = {
-        "total_periods": n_total_periods,
-        "filtered_short_periods": int(n_short_periods),
-        "after_short_filter": int(n_after_short_filter),
-        "graph_info": {
-            "nodes": len(G.nodes),
-            "edges": len(G.edges),
-        },
         "node_assignment": {
             "total_points": total_points,
             "successful_assignments": successful_assignments,
             "failed_assignments": failed_assignments,
             "success_pct": successful_assignments / total_points if total_points else None,
             "fail_pct": failed_assignments / total_points if total_points else None,
+            "unique_nodes_used": len(set(n for n in assigned_nodes if n is not None)),
+            "cache_status": "reused" if cache_valid else "computed",
         },
         "path_computation": {
             "total_pairs": 0,
@@ -434,22 +306,22 @@ def compute_network_shortest_paths_batched(
     batch_size_pairs = 1000
     for i in tqdm(range(0, len(node_pairs), batch_size_pairs), desc="Node pair batches"):
         batch_pairs = node_pairs[i:i+batch_size_pairs]
-        with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            futures = {executor.submit(compute_pair, pair): pair for pair in batch_pairs}
-            for future in as_completed(futures):
-                pair, dist = future.result()
-                node_pair_to_dist[pair] = dist
-                if pair[0] is not None and pair[1] is not None:
-                    node_pair_rows.append({"start_node": pair[0], "end_node": pair[1], "distance_km": dist})
-                if pair[0] is None or pair[1] is None:
-                    continue
-                if pair[0] == pair[1]:
-                    same_node_pairs += 1
-                elif np.isnan(dist):
-                    failed_paths += 1
-                else:
-                    successful_paths += 1
-                    path_lengths.append(dist)
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = {executor.submit(compute_pair, pair): pair for pair in batch_pairs}
+        for future in as_completed(futures):
+            pair, dist = future.result()
+            node_pair_to_dist[pair] = dist
+            if pair[0] is not None and pair[1] is not None:
+                node_pair_rows.append({"start_node": pair[0], "end_node": pair[1], "distance_km": dist})
+            if pair[0] is None or pair[1] is None:
+                continue
+            if pair[0] == pair[1]:
+                same_node_pairs += 1
+            elif np.isnan(dist):
+                failed_paths += 1
+            else:
+                successful_paths += 1
+                path_lengths.append(dist)
 
     stats["path_computation"].update({
         "total_pairs": total_pairs,
@@ -770,7 +642,7 @@ def main():
     parser.add_argument("--clean-step", type=str, help="Remove outputs/meta/checkpoints for specific steps (comma-separated). Valid steps: cleaned_points, cleaned_with_period_id, periods_with_sld_ratio, network, osm_graph.")
     parser.add_argument("--run-analysis", action="store_true", help="Automatically run the analysis tool after pipeline completes.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
-    parser.add_argument("--reuse-latest", action="store_true", help="Reuse latest available outputs for each step if possible.")
+    parser.add_argument("--reuse-latest", action="store_true", help="Try to reuse latest available outputs for each step.")
     args = parser.parse_args()
     if args.clean and args.clean_step:
         parser.error("--clean and --clean-step cannot be used together.")
@@ -779,19 +651,12 @@ def main():
     if args.clean_step and args.reuse_latest:
         parser.error("--clean-step and --reuse-latest cannot be used together.")
     if args.clean:
+        logging.info("[CLEAN] Running pipeline in clean mode - all steps will be computed from scratch")
         clean_pipeline_outputs()
-        logging.info("[CLEAN RUN] --clean specified: all outputs, meta, and checkpoints have been deleted. This will be a fully clean run: no cache, checkpoints, or previous outputs will be reused. All steps will be recomputed from scratch.")
-        # Forcibly disable all reuse logic for this run
-        args.reuse_latest = False
-        reuse_cleaned_points = False
-        reuse_cleaned_with_pid = False
-        reuse_periods_sld = False
-        reuse_network_ratio = False
-        reuse_final_periods = False
-    if args.clean_step:
-        steps = [s.strip() for s in args.clean_step.split(",")]
-        for step in steps:
-            clean_step_outputs(step)
+    elif args.reuse_latest:
+        logging.info("[REUSE] Running pipeline with --reuse-latest - will try to reuse latest available outputs")
+    else:
+        logging.info("[NORMAL] Running pipeline in normal mode - will reuse up-to-date outputs")
 
     configure_logging()
     logging.info("Starting indicators pipeline (pure Python version)")
@@ -855,264 +720,279 @@ def main():
     # --- Step 1: Cleaned points ---
     step_name = "cleaned_points"
     step_info = {"timestamp": datetime.now().isoformat()}
+    cleaned_df = None  # Initialize to None
     cleaned_points_path = f"data/cleaned_points_in_beijing_{run_id}.parquet"
     cleaned_points_meta = cleaned_points_path + ".meta.json"
     filtered_points_path = "data/filtered_points_in_beijing.parquet"
     input_paths = {"filtered_points_hash": filtered_points_path}
-    if not args.clean:
-        reuse_cleaned_points = False
-        reused_from = None
-    if args.reuse_latest and not os.path.exists(cleaned_points_path):
-        latest = find_latest_output("data/cleaned_points_in_beijing_*.parquet")
-        if latest and is_up_to_date(latest, input_paths):
-            logging.info(f"[REUSE] Using {latest} for cleaned points step.")
-            cleaned_points_path = latest
-            cleaned_points_meta = cleaned_points_path + ".meta.json"
-            reuse_cleaned_points = True
-            reused_from = latest
-    n_before_cleaned_points = None
-    n_after_cleaned_points = None
-    if is_up_to_date(cleaned_points_path, input_paths):
-        logging.info(f"{cleaned_points_path} is up-to-date. Skipping computation.")
-        cleaned_df = pl.read_parquet(cleaned_points_path)
-        n_after_cleaned_points = cleaned_df.height
-        # Try to infer n_before from previous filtering step or from filtered_points_in_beijing.parquet
-        try:
-            n_before_cleaned_points = pl.read_parquet(filtered_points_path).height
-        except Exception:
-            n_before_cleaned_points = n_after_cleaned_points
-        if cleaned_df.is_empty():
-            warning = "Reused cleaned points is empty. Recomputing."
-            logging.warning(warning)
-            step_info["status"] = "recomputed_due_to_empty"
-            step_info["reused_from"] = reused_from
-            step_info["warning"] = warning
-            reuse_cleaned_points = False
-        else:
-            step_info["status"] = "reused"
-            step_info["reused_from"] = reused_from
-            step_info["output_path"] = cleaned_points_path
-            step_info["reused"] = True
-            # Copy stats fields from source if available
-            step_info.update(copy_stats_from_source(step_name, reused_from))
-        run_metadata["steps"].setdefault(step_name, {})
-        run_metadata["steps"][step_name].update(step_info)
-        save_metadata()
+    reused_from = None
+
+    if args.clean:
+        # Clean mode: always compute from scratch
+        logging.info(f"[CLEAN] Computing {step_name} from scratch")
+        cleaned_df = pl.read_parquet(filtered_points_path).pipe(
+            add_time_distance_calcs
+        ).pipe(
+            add_implied_speed
+        ).pipe(
+            add_abnormality_flags
+        ).pipe(
+            select_final_columns
+        )
+        save_parquet(cleaned_df, cleaned_points_path, "cleaned points")
+        write_meta(cleaned_points_meta, {"filtered_points_hash": file_hash(filtered_points_path)})
+        step_info["status"] = "computed"
+        step_info["output_path"] = cleaned_points_path
     else:
-        # Always update stats even if reused
-        run_metadata["steps"].setdefault(step_name, {})
-        run_metadata["steps"][step_name].update(step_info)
-        save_metadata()
+        # Try to reuse latest or existing
+        if args.reuse_latest and not os.path.exists(cleaned_points_path):
+            latest = find_latest_output("data/cleaned_points_in_beijing_*.parquet")
+            if latest and is_up_to_date(latest, input_paths):
+                logging.info(f"[REUSE] Using {latest} for {step_name} step")
+                cleaned_points_path = latest
+                cleaned_points_meta = cleaned_points_path + ".meta.json"
+                reused_from = latest
+
+        if is_up_to_date(cleaned_points_path, input_paths):
+            logging.info(f"[SKIP] {cleaned_points_path} is up-to-date")
+            cleaned_df = pl.read_parquet(cleaned_points_path)
+            if cleaned_df.is_empty():
+                warning = f"Reused {step_name} is empty. Recomputing."
+                logging.warning(warning)
+                step_info["status"] = "recomputed_due_to_empty"
+                step_info["warning"] = warning
+            else:
+                step_info["status"] = "reused"
+                step_info["reused_from"] = reused_from
+                step_info["output_path"] = cleaned_points_path
+        else:
+            logging.info(f"[COMPUTE] Computing {step_name} from scratch")
+            cleaned_df = pl.read_parquet(filtered_points_path).pipe(
+                add_time_distance_calcs
+            ).pipe(
+                add_implied_speed
+            ).pipe(
+                add_abnormality_flags
+            ).pipe(
+                select_final_columns
+            )
+            save_parquet(cleaned_df, cleaned_points_path, "cleaned points")
+            write_meta(cleaned_points_meta, {"filtered_points_hash": file_hash(filtered_points_path)})
+            step_info["status"] = "computed"
+            step_info["output_path"] = cleaned_points_path
+
+    # Update metadata and record stats
     run_metadata["steps"][step_name] = step_info
     save_metadata()
-    stats.record_step_stats("cleaned_points", cleaned_df)
+    if cleaned_df is not None:
+        stats.record_step_stats("cleaned_points", cleaned_df)
 
     # --- Step 2: Cleaned with period_id ---
     step_name = "cleaned_with_period_id"
     step_info = {"timestamp": datetime.now().isoformat()}
+    cleaned_with_period_id = None  # Initialize to None
     cleaned_with_pid_path = f"data/cleaned_with_period_id_in_beijing_{run_id}.parquet"
     cleaned_with_pid_meta = cleaned_with_pid_path + ".meta.json"
     input_paths = {"cleaned_points_hash": cleaned_points_path}
-    if not args.clean:
-        reuse_cleaned_with_pid = False
-        reused_from = None
-    if args.reuse_latest and not os.path.exists(cleaned_with_pid_path):
-        latest = find_latest_output("data/cleaned_with_period_id_in_beijing_*.parquet")
-        if latest and is_up_to_date(latest, input_paths):
-            logging.info(f"[REUSE] Using {latest} for cleaned_with_period_id step.")
-            cleaned_with_pid_path = latest
-            cleaned_with_pid_meta = cleaned_with_pid_path + ".meta.json"
-            reuse_cleaned_with_pid = True
-            reused_from = latest
-    n_before_cleaned_with_pid = None
-    n_after_cleaned_with_pid = None
-    if is_up_to_date(cleaned_with_pid_path, input_paths):
-        logging.info(f"{cleaned_with_pid_path} is up-to-date. Skipping computation.")
-        cleaned_with_period_id = pl.read_parquet(cleaned_with_pid_path)
-        n_after_cleaned_with_pid = cleaned_with_period_id.height
-        # Try to infer n_before from cleaned_points
-        try:
-            n_before_cleaned_with_pid = pl.read_parquet(cleaned_points_path).height
-        except Exception:
-            n_before_cleaned_with_pid = n_after_cleaned_with_pid
-        if cleaned_with_period_id.is_empty():
-            warning = "Reused cleaned_with_period_id is empty. Recomputing."
-            logging.warning(warning)
-            step_info["status"] = "recomputed_due_to_empty"
-            step_info["reused_from"] = reused_from
-            step_info["warning"] = warning
-            reuse_cleaned_with_pid = False
-        else:
+    reused_from = None
+
+    if args.clean:
+        # Clean mode: always compute from scratch
+        logging.info(f"[CLEAN] Computing {step_name} from scratch")
+        cleaned_with_period_id = pl.read_parquet(cleaned_points_path).pipe(
+            attach_period_id,
+            pl.read_parquet(filtered_points_path)
+        )
+        save_parquet(cleaned_with_period_id, cleaned_with_pid_path, "cleaned with period_id")
+        write_meta(cleaned_with_pid_meta, {"cleaned_points_hash": file_hash(cleaned_points_path)})
+        step_info["status"] = "computed"
+        step_info["output_path"] = cleaned_with_pid_path
+    else:
+        # Try to reuse latest or existing
+        if args.reuse_latest and not os.path.exists(cleaned_with_pid_path):
+            latest = find_latest_output("data/cleaned_with_period_id_in_beijing_*.parquet")
+            if latest and is_up_to_date(latest, input_paths):
+                logging.info(f"[REUSE] Using {latest} for {step_name} step")
+                cleaned_with_pid_path = latest
+                cleaned_with_pid_meta = cleaned_with_pid_path + ".meta.json"
+                reused_from = latest
+
+        if is_up_to_date(cleaned_with_pid_path, input_paths):
+            logging.info(f"[SKIP] {cleaned_with_pid_path} is up-to-date")
+            cleaned_with_period_id = pl.read_parquet(cleaned_with_pid_path)
             step_info["status"] = "reused"
             step_info["reused_from"] = reused_from
             step_info["output_path"] = cleaned_with_pid_path
-            step_info["reused"] = True
-            # Copy stats fields from source if available
-            step_info.update(copy_stats_from_source(step_name, reused_from))
-        run_metadata["steps"].setdefault(step_name, {})
-        run_metadata["steps"][step_name].update(step_info)
-        save_metadata()
-    else:
-        # Always update stats even if reused
-        run_metadata["steps"].setdefault(step_name, {})
-        run_metadata["steps"][step_name].update(step_info)
-        save_metadata()
+        else:
+            logging.info(f"[COMPUTE] Computing {step_name} from scratch")
+            cleaned_with_period_id = pl.read_parquet(cleaned_points_path).pipe(
+                attach_period_id,
+                pl.read_parquet(filtered_points_path)
+            )
+            save_parquet(cleaned_with_period_id, cleaned_with_pid_path, "cleaned with period_id")
+            write_meta(cleaned_with_pid_meta, {"cleaned_points_hash": file_hash(cleaned_points_path)})
+            step_info["status"] = "computed"
+            step_info["output_path"] = cleaned_with_pid_path
+
+    # Update metadata and record stats
     run_metadata["steps"][step_name] = step_info
     save_metadata()
-    stats.record_step_stats("cleaned_with_period_id", cleaned_with_period_id)
+    if cleaned_with_period_id is not None:
+        stats.record_step_stats("cleaned_with_period_id", cleaned_with_period_id)
 
     # --- Step 3: Period summary with SLD ratio ---
     step_name = "periods_with_sld_ratio"
     step_info = {"timestamp": datetime.now().isoformat()}
+    period_df = None  # Initialize to None
     periods_sld_path = f"data/periods_with_sld_ratio_{run_id}.parquet"
     periods_sld_meta = periods_sld_path + ".meta.json"
     input_paths = {"cleaned_with_pid_hash": cleaned_with_pid_path}
-    if not args.clean:
-        reuse_periods_sld = False
-        reused_from = None
-    if args.reuse_latest and not os.path.exists(periods_sld_path):
-        latest = find_latest_output("data/periods_with_sld_ratio_*.parquet")
-        if latest and is_up_to_date(latest, input_paths):
-            logging.info(f"[REUSE] Using {latest} for periods_with_sld_ratio step.")
-            periods_sld_path = latest
-            periods_sld_meta = periods_sld_path + ".meta.json"
-            reuse_periods_sld = True
-            reused_from = latest
-    n_before_periods_sld = None
-    n_after_periods_sld = None
-    if is_up_to_date(periods_sld_path, input_paths):
-        logging.info(f"{periods_sld_path} is up-to-date. Skipping computation.")
-        period_df = pl.read_parquet(periods_sld_path)
-        n_after_periods_sld = period_df.height
-        # Try to infer n_before from cleaned_with_period_id
-        try:
-            n_before_periods_sld = pl.read_parquet(cleaned_with_pid_path).height
-        except Exception:
-            n_before_periods_sld = n_after_periods_sld
-        if period_df.is_empty():
-            warning = "Reused periods_with_sld_ratio is empty. Recomputing."
-            logging.warning(warning)
-            step_info["status"] = "recomputed_due_to_empty"
-            step_info["reused_from"] = reused_from
-            step_info["warning"] = warning
-            reuse_periods_sld = False
-        else:
+    reused_from = None
+
+    if args.clean:
+        # Clean mode: always compute from scratch
+        logging.info(f"[CLEAN] Computing {step_name} from scratch")
+        period_df = cleaned_with_period_id.pipe(summarize_periods)
+        save_parquet(period_df, periods_sld_path, "periods with SLD ratio")
+        write_meta(periods_sld_meta, {"cleaned_with_pid_hash": file_hash(cleaned_with_pid_path)})
+        step_info["status"] = "computed"
+        step_info["output_path"] = periods_sld_path
+    else:
+        # Try to reuse latest or existing
+        if args.reuse_latest and not os.path.exists(periods_sld_path):
+            latest = find_latest_output("data/periods_with_sld_ratio_*.parquet")
+            if latest and is_up_to_date(latest, input_paths):
+                logging.info(f"[REUSE] Using {latest} for {step_name} step")
+                periods_sld_path = latest
+                reused_from = latest
+
+        if is_up_to_date(periods_sld_path, input_paths):
+            logging.info(f"[SKIP] {periods_sld_path} is up-to-date")
+            period_df = pl.read_parquet(periods_sld_path)
             step_info["status"] = "reused"
             step_info["reused_from"] = reused_from
             step_info["output_path"] = periods_sld_path
-            step_info["reused"] = True
-            # Copy stats fields from source if available
-            step_info.update(copy_stats_from_source(step_name, reused_from))
-        run_metadata["steps"].setdefault(step_name, {})
-        run_metadata["steps"][step_name].update(step_info)
-        save_metadata()
-    else:
-        # Always update stats even if reused
-        run_metadata["steps"].setdefault(step_name, {})
-        run_metadata["steps"][step_name].update(step_info)
-        save_metadata()
+        else:
+            logging.info(f"[COMPUTE] Computing {step_name} from scratch")
+            period_df = cleaned_with_period_id.pipe(summarize_periods)
+            save_parquet(period_df, periods_sld_path, "periods with SLD ratio")
+            write_meta(periods_sld_meta, {"cleaned_with_pid_hash": file_hash(cleaned_with_pid_path)})
+            step_info["status"] = "computed"
+            step_info["output_path"] = periods_sld_path
+
+    # Update metadata and record stats
     run_metadata["steps"][step_name] = step_info
     save_metadata()
-    stats.record_step_stats("periods_with_sld_ratio", period_df)
-    # Record IF and SLD indicator flags and overlaps
-    stats.record_indicator_flags(period_df, ["is_traj_outlier", "is_sld_outlier"])
+    if period_df is not None:
+        stats.record_step_stats("periods_with_sld_ratio", period_df)
 
-    # After period_df is created and saved as data/periods_with_sld_ratio_{run_id}.parquet
+    # --- Network steps ---
+    if args.clean:
+        logging.info("[CLEAN] Removing node cache and checkpoints")
+        for f in glob.glob(os.path.join(checkpoint_dir, "*")):
+            os.remove(f)
+            logging.info(f"[CLEAN] Removed {f}")
+
     # 1. Ensure OSM graph
     action, osm_graph_path = ensure_osm_graph("beijing_drive.graphml", periods_sld_path)
-    # 2. Compute network shortest paths and ratios (batched, threaded, checkpointed)
+
+    # 2. Network ratio step
+    step_name = "network_ratio"
+    step_info = {"timestamp": datetime.now().isoformat()}
+    network_ratio_df = None
     network_ratio_path = f"data/periods_with_network_ratio_{run_id}.parquet"
-    if not args.clean:
-        reuse_network_ratio = False
-        input_paths = {"periods_sld_hash": periods_sld_path}
-        if args.reuse_latest and not os.path.exists(network_ratio_path):
-            latest = find_latest_output("data/periods_with_network_ratio_*.parquet")
-            if latest and is_up_to_date(latest, input_paths):
-                logging.info(f"[REUSE] Using {latest} for network_ratio step.")
-                network_ratio_path = latest
-                reuse_network_ratio = True
-                reused_from = latest
-        if args.clean or not reuse_network_ratio:
-            compute_network_shortest_paths_batched(
-                periods_path=periods_sld_path,
-                osm_graph_path=osm_graph_path,
-                output_path=network_ratio_path,
-                batch_size=500,
-                num_workers=8,
-                checkpoint_dir="network_checkpoints",
-                run_id=run_id
-            )
-    else:
-        compute_network_shortest_paths_batched(
+    input_paths = {"periods_sld_hash": periods_sld_path}
+    reused_from = None
+
+    if args.clean:
+        logging.info(f"[CLEAN] Computing {step_name} from scratch")
+        network_ratio_df = compute_network_shortest_paths_batched(
             periods_path=periods_sld_path,
             osm_graph_path=osm_graph_path,
             output_path=network_ratio_path,
             batch_size=500,
             num_workers=8,
             checkpoint_dir="network_checkpoints",
-            run_id=run_id
+            run_id=run_id,
+            clean_mode=args.clean
         )
-    # 3. Compute threshold and flag outliers
-    final_periods_path = f"data/periods_with_network_ratio_flagged_{run_id}.parquet"
-    if not args.clean:
-        reuse_final_periods = False
-        input_paths = {"network_ratio_hash": network_ratio_path}
-        if args.reuse_latest and not os.path.exists(final_periods_path):
-            latest = find_latest_output("data/periods_with_network_ratio_flagged_*.parquet")
-            if latest and is_up_to_date(latest, input_paths):
-                logging.info(f"[REUSE] Using {latest} for network_ratio_flagged step.")
-                final_periods_path = latest
-                reuse_final_periods = True
-                reused_from = latest
-        if args.clean or not reuse_final_periods:
-            compute_network_outlier_flag(
-                input_path=network_ratio_path,
-                output_path=final_periods_path,
-                run_id=run_id
-            )
-    else:
-        compute_network_outlier_flag(
-            input_path=network_ratio_path,
-            output_path=final_periods_path,
-            run_id=run_id
-        )
-    step_name = "network_outlier_flag"
-    step_info = {"timestamp": datetime.now().isoformat()}
-    n_before_network_outlier_flag = None
-    n_after_network_outlier_flag = None
-    if is_up_to_date(final_periods_path, {"network_ratio_hash": network_ratio_path}):
-        try:
-            n_after_network_outlier_flag = pl.read_parquet(final_periods_path).height
-        except Exception:
-            n_after_network_outlier_flag = None
-        try:
-            n_before_network_outlier_flag = pl.read_parquet(periods_sld_path).height
-        except Exception:
-            n_before_network_outlier_flag = n_after_network_outlier_flag
-        step_info["status"] = "reused"
-        step_info["output_path"] = final_periods_path
-        step_info["reused"] = True
-        step_info["reused_from"] = reused_from
-        # Copy stats fields from source if available
-        step_info.update(copy_stats_from_source(step_name, reused_from))
-    else:
-        n_before = period_df.height
-        n_after = pl.read_parquet(final_periods_path).height
-        n_before_network_outlier_flag = n_before
-        n_after_network_outlier_flag = n_after
         step_info["status"] = "computed"
-        step_info["output_path"] = final_periods_path
-        step_info["reused"] = False
-        step_info["reused_from"] = None
-    run_metadata["steps"].setdefault(step_name, {})
-    run_metadata["steps"][step_name].update(step_info)
-    save_metadata()
+        step_info["output_path"] = network_ratio_path
+    else:
+        if args.reuse_latest and not os.path.exists(network_ratio_path):
+            latest = find_latest_output("data/periods_with_network_ratio_*.parquet")
+            if latest and is_up_to_date(latest, input_paths):
+                logging.info(f"[REUSE] Using {latest} for {step_name} step")
+                network_ratio_path = latest
+                reused_from = latest
+
+        if is_up_to_date(network_ratio_path, input_paths):
+            logging.info(f"[SKIP] {network_ratio_path} is up-to-date")
+            network_ratio_df = pd.read_parquet(network_ratio_path)
+            step_info["status"] = "reused"
+            step_info["reused_from"] = reused_from
+            step_info["output_path"] = network_ratio_path
+        else:
+            logging.info(f"[COMPUTE] Computing {step_name} from scratch")
+            network_ratio_df = compute_network_shortest_paths_batched(
+                periods_path=periods_sld_path,
+                osm_graph_path=osm_graph_path,
+                output_path=network_ratio_path,
+                batch_size=500,
+                num_workers=8,
+                checkpoint_dir="network_checkpoints",
+                run_id=run_id,
+                clean_mode=args.clean
+            )
+            step_info["status"] = "computed"
+            step_info["output_path"] = network_ratio_path
+
+    # Update metadata and record stats
     run_metadata["steps"][step_name] = step_info
     save_metadata()
-    # After network outlier flag, load and record all indicator overlaps
-    final_df = pl.read_parquet(final_periods_path)
-    stats.record_step_stats("network_outlier_flag", final_df)
-    stats.record_indicator_flags(final_df, ["is_traj_outlier", "is_sld_outlier", "is_network_outlier"])
+    if network_ratio_df is not None:
+        stats.record_step_stats("network_ratio", network_ratio_df)
+
+    # --- Step 5: Network outlier flag ---
+    step_name = "network_outlier_flag"
+    step_info = {"timestamp": datetime.now().isoformat()}
+    final_df = None  # Initialize to None
+    input_paths = {"network_ratio_hash": network_ratio_path}
+    reused_from = None
+
+    if args.clean:
+        logging.info(f"[CLEAN] Computing {step_name} from scratch")
+        final_df = compute_network_outlier_flag(
+            input_path=network_ratio_path,
+            output_path=f"data/periods_with_network_ratio_flagged_{run_id}.parquet",
+            run_id=run_id
+        )
+        step_info["status"] = "computed"
+        step_info["output_path"] = f"data/periods_with_network_ratio_flagged_{run_id}.parquet"
+    else:
+        if args.reuse_latest and not os.path.exists(f"data/periods_with_network_ratio_flagged_{run_id}.parquet"):
+            latest = find_latest_output("data/periods_with_network_ratio_flagged_*.parquet")
+            if latest and is_up_to_date(latest, input_paths):
+                logging.info(f"[REUSE] Using {latest} for {step_name} step")
+                final_df = pd.read_parquet(latest)
+                step_info["status"] = "reused"
+                step_info["reused_from"] = latest
+                step_info["output_path"] = latest
+        if final_df is None:
+            logging.info(f"[COMPUTE] Computing {step_name} from scratch")
+            final_df = compute_network_outlier_flag(
+                input_path=network_ratio_path,
+                output_path=f"data/periods_with_network_ratio_flagged_{run_id}.parquet",
+                run_id=run_id
+            )
+            step_info["status"] = "computed"
+            step_info["output_path"] = f"data/periods_with_network_ratio_flagged_{run_id}.parquet"
+
+    # Update metadata and record stats
+    run_metadata["steps"][step_name] = step_info
+    save_metadata()
+    if final_df is not None:
+        stats.record_step_stats("network_outlier_flag", final_df)
 
     # --- Write LAST_RUN_ID file ---
     with open(os.path.join("pipeline_stats", "LAST_RUN_ID"), "w") as f:
@@ -1141,7 +1021,7 @@ def main():
         extra_cmd = [
             sys.executable, "pipeline_network_analysis.py",
             "--graph", "beijing_drive.graphml",
-            "--periods", final_periods_path,
+            "--periods", f"data/periods_with_network_ratio_flagged_{run_id}.parquet",
             "--all"
         ]
         logging.info(f"Running extra analysis tool: {' '.join(extra_cmd)}")

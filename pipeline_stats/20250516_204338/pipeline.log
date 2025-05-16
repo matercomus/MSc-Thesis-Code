@@ -1,0 +1,3 @@
+2025-05-16 20:43:38,762 INFO Random seed set to 42
+2025-05-16 20:43:39,529 INFO Saved pip freeze to pipeline_stats/20250516_204338/environment.txt
+2025-05-16 20:43:39,529 INFO [CLEAN] Computing cleaned_points from scratch

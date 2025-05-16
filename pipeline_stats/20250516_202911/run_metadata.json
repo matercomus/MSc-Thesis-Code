@@ -1,0 +1,21 @@
+{
+  "run_id": "20250516_202911",
+  "start_time": "2025-05-16T20:29:11.777962",
+  "git_commit": "492c0a9d43950e0cf3844f31f1fd78c6e8ae2cc3",
+  "env_file": "pipeline_stats/20250516_202911/environment.txt",
+  "steps": {
+    "cleaned_points": {
+      "timestamp": "2025-05-16T20:29:12.265025"
+    },
+    "cleaned_with_period_id": {
+      "timestamp": "2025-05-16T20:29:12.265417"
+    }
+  },
+  "args": {
+    "clean": true,
+    "clean_step": null,
+    "run_analysis": false,
+    "seed": 42,
+    "reuse_latest": false
+  }
+}
