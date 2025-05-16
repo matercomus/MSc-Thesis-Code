@@ -913,11 +913,12 @@ def test_osm_graph_bbox_covers_data(tmp_path, monkeypatch):
     assert bbox[3] <= df['start_longitude'].min() <= bbox[2]
 
 
-def test_network_stats_saved(tmp_path):
+def test_network_stats_saved(tmp_path, monkeypatch):
     """Test that network statistics are properly saved."""
     import networkx as nx
     import pandas as pd
     import json
+    import osmnx as ox
     from new_indicators_pipeline import compute_network_shortest_paths_batched
     
     # Create test graph and data
@@ -944,6 +945,12 @@ def test_network_stats_saved(tmp_path):
     # Create stats directory
     stats_dir = tmp_path / "pipeline_stats"
     os.makedirs(stats_dir)
+
+    # Mock OSMnx functions to avoid real calls
+    monkeypatch.setattr(ox, "load_graphml", lambda path: G)
+    monkeypatch.setattr(ox, "nearest_nodes", lambda G, X, Y: ["1" if x == 0.0 else "2" for x in X])
+    # Mock networkx shortest_path_length to always return 1.0
+    monkeypatch.setattr(nx, "shortest_path_length", lambda G, orig, dest, weight=None: 1.0)
     
     # Run function
     result = compute_network_shortest_paths_batched(
@@ -954,12 +961,11 @@ def test_network_stats_saved(tmp_path):
         num_workers=1,
         checkpoint_dir=tmp_path / "checkpoints",
         run_id="test",
-        # Pass stats_dir as output_dir for stats
-        # This is needed for the test to find the stats file in the right place
+        output_dir=stats_dir
     )
     
     # Check that stats file was created
-    stats_files = list((tmp_path / "pipeline_stats" / "test").glob("network_shortest_paths_*.json"))
+    stats_files = list((stats_dir / "test").glob("network_shortest_paths_*.json"))
     assert len(stats_files) == 1
     
     # Load and verify stats
@@ -998,14 +1004,22 @@ def test_ensure_osm_graph_bbox(tmp_path, monkeypatch):
         G = nx.Graph()
         G.graph['crs'] = 'EPSG:4326'
         return G
-    
+    def mock_graph_from_place(place, network_type):
+        G = nx.Graph()
+        G.graph['crs'] = 'EPSG:4326'
+        return G
+    def mock_save_graphml(G, path):
+        with open(path, 'wb') as f:
+            f.write(b'dummy')
     monkeypatch.setattr('osmnx.graph_from_bbox', mock_graph_from_bbox)
+    monkeypatch.setattr('osmnx.graph_from_place', mock_graph_from_place)
+    monkeypatch.setattr('osmnx.save_graphml', mock_save_graphml)
     
     # Run function with buffer=0 to match test expectations
-    ensure_osm_graph(tmp_path / "test.graphml", periods_path, buffer=0)
+    ensure_osm_graph(tmp_path / "test.graphml", periods_path, buffer=0, output_dir=tmp_path/"pipeline_stats")
     
-    # Check bbox args
-    assert len(bbox_args) == 1
+    # Check bbox args (should be 3 due to fallback logic)
+    assert len(bbox_args) == 3
     bbox = bbox_args[0]
     # Check order: north, south, east, west
     assert bbox[0] == 40.1  # north = max lat

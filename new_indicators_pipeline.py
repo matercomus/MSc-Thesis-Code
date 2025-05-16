@@ -71,11 +71,12 @@ def attach_period_id(cleaned_df: pl.DataFrame, period_df: pl.DataFrame) -> pl.Da
     )
     return joined
 
-def ensure_osm_graph(osm_graph_path, periods_path, buffer=None):
+def ensure_osm_graph(osm_graph_path, periods_path, buffer=None, output_dir="pipeline_stats"):
     """
     Ensure the OSMnx graph is downloaded and covers the data bounding box.
     Buffer can be set via argument or OSM_GRAPH_BUFFER env var (default 0.05).
     If the graph is too small, try larger buffers, then fallback to Beijing city graph.
+    output_dir: directory to save stats (for testability)
     """
     meta_path = str(osm_graph_path) + '.meta.json'
     if Path(osm_graph_path).exists() and Path(meta_path).exists():
@@ -133,8 +134,12 @@ def compute_network_shortest_paths_batched(
     checkpoint_dir="network_checkpoints",
     run_id=None,
     node_cache_batch_size=5000,
-    node_cache_num_workers=4
+    node_cache_num_workers=4,
+    output_dir="pipeline_stats"
 ):
+    """
+    Compute network shortest paths and save stats to output_dir.
+    """
     # Setup logging
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     logger = logging.getLogger("network_shortest_path")
@@ -339,9 +344,9 @@ def compute_network_shortest_paths_batched(
     
     # Save statistics
     if run_id is not None:
-        save_step_stats("network_shortest_paths", stats, run_id)
+        save_step_stats("network_shortest_paths", stats, run_id, output_dir=output_dir)
     else:
-        save_step_stats("network_shortest_paths", stats, "default")
+        save_step_stats("network_shortest_paths", stats, "default", output_dir=output_dir)
     
     final_df.to_parquet(output_path)
     logger.info(f"Saved final results to {output_path}")
