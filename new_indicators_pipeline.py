@@ -268,7 +268,7 @@ def main():
 
     if args.clean:
         logging.info(f"[CLEAN] Computing {step_name} from scratch")
-        period_df = run_periods_with_sld_ratio(cleaned_with_period_id, periods_sld_path, periods_sld_meta, step_name, stats, args)
+        period_df = run_periods_with_sld_ratio(cleaned_with_period_id, cleaned_with_pid_path, periods_sld_path, periods_sld_meta, step_name, stats, args)
         step_info["status"] = "computed"
         step_info["output_path"] = periods_sld_path
     else:
@@ -287,7 +287,7 @@ def main():
             step_info["output_path"] = periods_sld_path
         else:
             logging.info(f"[COMPUTE] Computing {step_name} from scratch")
-            period_df = run_periods_with_sld_ratio(cleaned_with_period_id, periods_sld_path, periods_sld_meta, step_name, stats, args)
+            period_df = run_periods_with_sld_ratio(cleaned_with_period_id, cleaned_with_pid_path, periods_sld_path, periods_sld_meta, step_name, stats, args)
             step_info["status"] = "computed"
             step_info["output_path"] = periods_sld_path
 

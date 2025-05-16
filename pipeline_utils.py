@@ -223,10 +223,10 @@ def run_cleaned_with_period_id(cleaned_points_path, cleaned_with_pid_path, clean
     return cleaned_with_pid
 
 @profile_step("periods_with_sld_ratio")
-def run_periods_with_sld_ratio(cleaned_with_period_id, periods_sld_path, periods_sld_meta, step_name, stats, args):
+def run_periods_with_sld_ratio(cleaned_with_period_id, cleaned_with_pid_path, periods_sld_path, periods_sld_meta, step_name, stats, args):
     period_df = summarize_periods(cleaned_with_period_id)
     period_df.write_parquet(periods_sld_path)
-    write_meta(periods_sld_meta, {"cleaned_with_pid_hash": file_hash(periods_sld_path)})
+    write_meta(periods_sld_meta, {"cleaned_with_pid_hash": file_hash(cleaned_with_pid_path)})
     stats.record_step_stats(step_name, period_df)
     return period_df
 
