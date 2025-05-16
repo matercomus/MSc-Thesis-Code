@@ -1,0 +1,6 @@
+2025-05-16 20:53:56,573 INFO Random seed set to 42
+2025-05-16 20:53:57,127 INFO Saved pip freeze to pipeline_stats/20250516_205356/environment.txt
+2025-05-16 20:53:57,127 INFO [CLEAN] Computing cleaned_points from scratch
+2025-05-16 20:53:58,525 INFO Using gap_threshold_sec=105.00, speed_threshold_kph=146.81 for abnormality flags
+2025-05-16 20:54:08,598 INFO Saved cleaned points to data/cleaned_points_in_beijing_20250516_205356.parquet (shape: (12667620, 12))
+2025-05-16 20:54:09,088 INFO [CLEAN] Computing cleaned_with_period_id from scratch

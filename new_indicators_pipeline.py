@@ -144,7 +144,7 @@ def compute_network_shortest_paths_batched(
     num_workers=8,
     checkpoint_dir="network_checkpoints",
     run_id=None,
-    node_cache_batch_size=5000,
+    node_cache_batch_size=1000,
     node_cache_num_workers=4,
     output_dir="pipeline_stats",
     clean_mode=False
@@ -191,41 +191,45 @@ def compute_network_shortest_paths_batched(
         logger.info(f"Processing {len(all_points)} unique points in {node_cache_batch_size} point batches")
         
         point_to_node = {}
-        node_rows = []
-        
-        # Process in batches
-        batches = [all_points[i:i+node_cache_batch_size] for i in range(0, len(all_points), node_cache_batch_size)]
-        
-        # Define process_batch here so it can access G
-        def process_batch(batch):
-            lats, lons = zip(*batch)
-            try:
-                nodes = ox.nearest_nodes(G, lons, lats)  # vectorized
-            except Exception:
-                nodes = [None] * len(batch)
-            return list(zip(batch, nodes))
-        
-        with ThreadPoolExecutor(max_workers=node_cache_num_workers) as executor:
-            futures = {executor.submit(process_batch, batch): batch for batch in batches}
-            for future in tqdm(as_completed(futures), total=len(batches), desc="Node cache batches"):
-                results = future.result()
-                for (latlon, node) in results:
-                    lat, lon = latlon
-                    point_to_node[(lat, lon)] = node
-                    node_rows.append({"lat": lat, "lon": lon, "node": node})
-        
+        import tempfile
+        import csv
+        with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv') as tmpfile:
+            writer = csv.writer(tmpfile)
+            writer.writerow(['lat', 'lon', 'node'])
+            def process_batch(batch):
+                lats, lons = zip(*batch)
+                try:
+                    nodes = ox.nearest_nodes(G, lons, lats)  # vectorized
+                except Exception:
+                    nodes = [None] * len(batch)
+                return list(zip(batch, nodes))
+            batches = [all_points[i:i+node_cache_batch_size] for i in range(0, len(all_points), node_cache_batch_size)]
+            with ThreadPoolExecutor(max_workers=node_cache_num_workers) as executor:
+                futures = {executor.submit(process_batch, batch): batch for batch in batches}
+                for future in tqdm(as_completed(futures), total=len(batches), desc="Node cache batches"):
+                    results = future.result()
+                    for (latlon, node) in results:
+                        lat, lon = latlon
+                        point_to_node[(lat, lon)] = node
+                        writer.writerow([lat, lon, node])
+            tmpfile_path = tmpfile.name
         # Save cache unless in clean mode
         if not clean_mode:
-            node_df = pd.DataFrame(node_rows)
+            node_df = pd.read_csv(tmpfile_path)
             node_df.to_parquet(node_cache_path)
+            os.remove(tmpfile_path)
             with open(node_cache_meta, "w") as f:
                 json.dump({"periods_hash": periods_hash, "graph_hash": graph_hash}, f)
             logger.info(f"[SAVE] Node cache written to {node_cache_path}")
 
     # Save node assignments for reproducibility
     node_assignment_path = os.path.join(output_dir, run_id, f"node_assignment_{run_id}.parquet") if run_id else "node_assignment.parquet"
-    node_df = pd.DataFrame(node_rows)
-    node_df.to_parquet(node_assignment_path)
+    if not cache_valid:
+        # node_df already loaded above if not cache_valid
+        node_df.to_parquet(node_assignment_path)
+    else:
+        # If cache was valid, node_df is loaded from cache
+        node_df.to_parquet(node_assignment_path)
     logger.info(f"[SAVE] Node assignments saved to {node_assignment_path}")
 
     # --- Node assignment stats ---

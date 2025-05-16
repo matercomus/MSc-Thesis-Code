@@ -1,0 +1,13 @@
+2025-05-16 20:59:46,394 INFO Random seed set to 42
+2025-05-16 20:59:47,203 INFO Saved pip freeze to pipeline_stats/20250516_205945/environment.txt
+2025-05-16 20:59:47,203 INFO [CLEAN] Computing cleaned_points from scratch
+2025-05-16 20:59:48,918 INFO Using gap_threshold_sec=105.00, speed_threshold_kph=146.81 for abnormality flags
+2025-05-16 21:00:17,495 INFO Saved cleaned points to data/cleaned_points_in_beijing_20250516_205945.parquet (shape: (12667620, 12))
+2025-05-16 21:00:18,636 INFO [CLEAN] Computing cleaned_with_period_id from scratch
+2025-05-16 21:00:36,684 INFO [CLEAN] Computing periods_with_sld_ratio from scratch
+2025-05-16 21:01:32,402 INFO [RECOMPUTE] OSM graph exists but is not up-to-date: beijing_drive.graphml
+2025-05-16 21:28:07,204 INFO [RECOMPUTE] OSM graph written: beijing_drive.graphml
+2025-05-16 21:28:07,394 INFO [CLEAN] Computing network_ratio from scratch
+2025-05-16 21:29:05,940 INFO [CLEAN] Skipping node cache in clean mode
+2025-05-16 21:29:05,940 INFO [COMPUTE] Building node cache from scratch
+2025-05-16 21:29:33,412 INFO Processing 6906788 unique points in 5000 point batches
