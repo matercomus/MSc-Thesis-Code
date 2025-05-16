@@ -1,0 +1,19 @@
+2025-05-16 16:29:16,943 INFO Random seed set to 42
+2025-05-16 16:29:17,614 INFO Saved pip freeze to pipeline_stats/20250516_162916/environment.txt
+2025-05-16 16:29:18,286 INFO [REUSE] Using data/cleaned_points_in_beijing_20250516_154101.parquet for cleaned points step.
+2025-05-16 16:29:18,794 INFO data/cleaned_points_in_beijing_20250516_154101.parquet is up-to-date. Skipping computation.
+2025-05-16 16:29:19,348 INFO [REUSE] Using data/cleaned_with_period_id_in_beijing_20250516_154101.parquet for cleaned_with_period_id step.
+2025-05-16 16:29:19,553 INFO data/cleaned_with_period_id_in_beijing_20250516_154101.parquet is up-to-date. Skipping computation.
+2025-05-16 16:29:20,225 INFO [REUSE] Using data/periods_with_sld_ratio_20250516_154101.parquet for periods_with_sld_ratio step.
+2025-05-16 16:29:20,418 INFO data/periods_with_sld_ratio_20250516_154101.parquet is up-to-date. Skipping computation.
+2025-05-16 16:29:20,439 INFO [REUSE] OSM graph is up-to-date: beijing_drive.graphml
+2025-05-16 16:29:20,571 INFO Filtering out 11497 periods with sum_distance < 1.0 km out of 25127 total.
+2025-05-16 16:30:00,374 INFO Loading persistent node cache from network_checkpoints/point_to_node.parquet
+2025-05-16 16:30:00,583 INFO Loaded checkpoint with 13630 completed periods.
+2025-05-16 16:30:00,588 INFO Processing 0 new periods (skipping 13630 already done).
+2025-05-16 16:30:00,617 INFO Computing shortest paths for 0 unique node pairs (batched)...
+2025-05-16 16:30:00,626 INFO Filtering out 1173 periods with failed or degenerate network path computation (NaN or <1km).
+2025-05-16 16:30:00,635 INFO Saved network_shortest_paths statistics to pipeline_stats/20250516_162916/network_shortest_paths_stats_20250516_163000.json
+2025-05-16 16:30:00,704 INFO Saved final results to data/periods_with_network_ratio_20250516_162916.parquet
+2025-05-16 16:30:00,722 INFO [REUSE] Using data/periods_with_network_ratio_flagged_20250516_154101.parquet for network_ratio_flagged step.
+2025-05-16 16:30:00,733 INFO Pipeline completed: all parquet files written.

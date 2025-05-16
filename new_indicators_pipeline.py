@@ -213,6 +213,58 @@ def compute_network_shortest_paths_batched(
                         stats[key] = prev_stats[key]
             except Exception as e:
                 logger.warning(f"Could not load previous stats file {stats_file}: {e}")
+        # If node assignment/path computation stats are missing or zero, try to recompute from sidecar files
+        try:
+            if (not stats["node_assignment"]["total_points"] or not stats["path_computation"]["total_pairs"]):
+                # Try to load node assignment info
+                if run_id:
+                    node_assignment_path = os.path.join(output_dir, run_id, f"node_assignment_{run_id}.parquet")
+                    node_pairs_path = os.path.join(output_dir, run_id, f"node_pairs_{run_id}.parquet")
+                else:
+                    node_assignment_path = "node_assignment.parquet"
+                    node_pairs_path = "node_pairs.parquet"
+                if os.path.exists(node_assignment_path):
+                    node_df = pd.read_parquet(node_assignment_path)
+                    total_points = len(node_df)
+                    successful_assignments = node_df["node"].notna().sum()
+                    failed_assignments = total_points - successful_assignments
+                    stats["node_assignment"].update({
+                        "total_points": total_points,
+                        "successful_assignments": successful_assignments,
+                        "failed_assignments": failed_assignments,
+                        "success_pct": successful_assignments / total_points if total_points else None,
+                        "fail_pct": failed_assignments / total_points if total_points else None,
+                    })
+                if os.path.exists(node_pairs_path):
+                    node_pairs_df = pd.read_parquet(node_pairs_path)
+                    total_pairs = len(node_pairs_df)
+                    successful_paths = node_pairs_df["distance_km"].notna().sum()
+                    failed_paths = node_pairs_df["distance_km"].isna().sum()
+                    same_node_pairs = (node_pairs_df["start_node"] == node_pairs_df["end_node"]).sum()
+                    path_lengths = node_pairs_df["distance_km"].dropna().values
+                    stats["path_computation"].update({
+                        "total_pairs": total_pairs,
+                        "successful_paths": int(successful_paths),
+                        "failed_paths": int(failed_paths),
+                        "same_node_pairs": int(same_node_pairs),
+                        "success_pct": successful_paths / total_pairs if total_pairs else None,
+                        "fail_pct": failed_paths / total_pairs if total_pairs else None,
+                        "same_node_pct": same_node_pairs / total_pairs if total_pairs else None,
+                    })
+                    if len(path_lengths) > 0:
+                        arr = np.array(path_lengths)
+                        stats["path_computation"].update({
+                            "length_min": float(np.min(arr)),
+                            "length_max": float(np.max(arr)),
+                            "length_mean": float(np.mean(arr)),
+                            "length_median": float(np.median(arr)),
+                            "length_std": float(np.std(arr)),
+                            "length_percentiles": {p: float(np.percentile(arr, p)) for p in [5, 25, 50, 75, 95]},
+                            "length_hist": np.histogram(arr, bins=10)[0].tolist(),
+                            "length_bin_edges": np.histogram(arr, bins=10)[1].tolist(),
+                        })
+        except Exception as e:
+            logger.warning(f"Could not recompute node assignment/path computation stats from sidecar files: {e}")
         if run_id is not None:
             save_step_stats("network_shortest_paths", stats, run_id, output_dir=output_dir)
         else:
@@ -283,8 +335,19 @@ def compute_network_shortest_paths_batched(
         with open(node_cache_meta, "w") as f:
             json.dump({"periods_hash": periods_hash, "graph_hash": graph_hash}, f)
         logger.info(f"Saved persistent node cache to {node_cache_path}")
+    # Save node assignment info for reproducibility
+    node_assignment_path = os.path.join(output_dir, run_id, f"node_assignment_{run_id}.parquet") if run_id else "node_assignment.parquet"
+    node_df.to_parquet(node_assignment_path)
 
-    # Initialize statistics
+    # --- Node assignment stats ---
+    all_points = list(set(
+        list(zip(periods_df['start_latitude'], periods_df['start_longitude'])) +
+        list(zip(periods_df['end_latitude'], periods_df['end_longitude']))
+    ))
+    total_points = len(all_points)
+    assigned_nodes = [point_to_node.get((lat, lon)) for (lat, lon) in all_points]
+    successful_assignments = sum(n is not None for n in assigned_nodes)
+    failed_assignments = total_points - successful_assignments
     stats = {
         "total_periods": n_total_periods,
         "filtered_short_periods": int(n_short_periods),
@@ -294,9 +357,11 @@ def compute_network_shortest_paths_batched(
             "edges": len(G.edges),
         },
         "node_assignment": {
-            "total_points": 0,
-            "successful_assignments": 0,
-            "failed_assignments": 0,
+            "total_points": total_points,
+            "successful_assignments": successful_assignments,
+            "failed_assignments": failed_assignments,
+            "success_pct": successful_assignments / total_points if total_points else None,
+            "fail_pct": failed_assignments / total_points if total_points else None,
         },
         "path_computation": {
             "total_pairs": 0,
@@ -341,7 +406,14 @@ def compute_network_shortest_paths_batched(
     to_process['end_node'] = [point_to_node.get((row['end_latitude'], row['end_longitude'])) for _, row in to_process.iterrows()]
     node_pairs = set(zip(to_process['start_node'], to_process['end_node']))
     node_pair_to_dist = {}
+    node_pair_rows = []
 
+    # --- Path computation stats ---
+    total_pairs = len(node_pairs)
+    successful_paths = 0
+    failed_paths = 0
+    same_node_pairs = 0
+    path_lengths = []
     # --- BATCHED NODE PAIR SHORTEST PATHS ---
     def compute_pair(pair):
         orig, dest = pair
@@ -354,7 +426,7 @@ def compute_network_shortest_paths_batched(
             dist = nx.shortest_path_length(G, orig, dest, weight='length') / 1000
             return pair, dist
         except Exception as e:
-            logger.warning(f"Failed to compute shortest path for {pair}: {e}")
+            # Count unreachable node pairs in stats
             return pair, float('nan')
 
     logger.info(f"Computing shortest paths for {len(node_pairs)} unique node pairs (batched)...")
@@ -367,6 +439,40 @@ def compute_network_shortest_paths_batched(
             for future in as_completed(futures):
                 pair, dist = future.result()
                 node_pair_to_dist[pair] = dist
+                if pair[0] is not None and pair[1] is not None:
+                    node_pair_rows.append({"start_node": pair[0], "end_node": pair[1], "distance_km": dist})
+                if pair[0] is None or pair[1] is None:
+                    continue
+                if pair[0] == pair[1]:
+                    same_node_pairs += 1
+                elif np.isnan(dist):
+                    failed_paths += 1
+                else:
+                    successful_paths += 1
+                    path_lengths.append(dist)
+
+    stats["path_computation"].update({
+        "total_pairs": total_pairs,
+        "successful_paths": successful_paths,
+        "failed_paths": failed_paths,
+        "same_node_pairs": same_node_pairs,
+        "success_pct": successful_paths / total_pairs if total_pairs else None,
+        "fail_pct": failed_paths / total_pairs if total_pairs else None,
+        "same_node_pct": same_node_pairs / total_pairs if total_pairs else None,
+    })
+    # Path length distribution stats
+    if path_lengths:
+        arr = np.array(path_lengths)
+        stats["path_computation"].update({
+            "length_min": float(np.min(arr)),
+            "length_max": float(np.max(arr)),
+            "length_mean": float(np.mean(arr)),
+            "length_median": float(np.median(arr)),
+            "length_std": float(np.std(arr)),
+            "length_percentiles": {p: float(np.percentile(arr, p)) for p in [5, 25, 50, 75, 95]},
+            "length_hist": np.histogram(arr, bins=10)[0].tolist(),
+            "length_bin_edges": np.histogram(arr, bins=10)[1].tolist(),
+        })
 
     # Assign distances to periods
     def get_dist(row):
@@ -400,6 +506,19 @@ def compute_network_shortest_paths_batched(
         else:
             batch.to_parquet(checkpoint_file)
         logger.info(f"Checkpointed batch {i//batch_size+1} ({len(batch)} periods).")
+    # Route deviation ratio distribution stats
+    if all_ratios:
+        arr = np.array(all_ratios)
+        stats["ratio_stats"].update({
+            "min": float(np.min(arr)),
+            "max": float(np.max(arr)),
+            "mean": float(np.mean(arr)),
+            "median": float(np.median(arr)),
+            "std": float(np.std(arr)),
+            "percentiles": {p: float(np.percentile(arr, p)) for p in [5, 25, 50, 75, 95]},
+            "hist": np.histogram(arr, bins=10)[0].tolist(),
+            "bin_edges": np.histogram(arr, bins=10)[1].tolist(),
+        })
 
     # Combine with previous results
     if not done_df.empty:
@@ -439,6 +558,10 @@ def compute_network_shortest_paths_batched(
         save_step_stats("network_shortest_paths", stats, run_id, output_dir=output_dir)
     else:
         save_step_stats("network_shortest_paths", stats, "default", output_dir=output_dir)
+
+    # Save node pair info for reproducibility
+    node_pairs_path = os.path.join(output_dir, run_id, f"node_pairs_{run_id}.parquet") if run_id else "node_pairs.parquet"
+    pd.DataFrame(node_pair_rows).to_parquet(node_pairs_path)
 
     final_df.to_parquet(output_path)
     logger.info(f"Saved final results to {output_path}")

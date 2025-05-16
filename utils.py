@@ -468,9 +468,12 @@ def detect_outliers_pd(
 
     # Reset at new trajectories
     new_traj = df_copy['license_plate'] != df_copy['license_plate'].shift(1)
-    speed[new_traj] = np.nan
-    acceleration[new_traj] = np.nan
-    direction_change[new_traj] = np.nan
+    speed = speed.copy()
+    acceleration = acceleration.copy()
+    direction_change = direction_change.copy()
+    speed.loc[new_traj] = np.nan
+    acceleration.loc[new_traj] = np.nan
+    direction_change.loc[new_traj] = np.nan
 
     # Prepare feature matrix
     feat = pd.DataFrame({

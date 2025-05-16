@@ -86,8 +86,6 @@ def plot_graph(G, ax=None, save_path=None):
     if save_path is not None:
         plt.savefig(save_path, dpi=150)
         print(f"Saved graph plot to {save_path}")
-    if fig:
-        plt.show()
 
 
 def plot_data_on_graph(G, periods, ax=None, sample=1000, save_path=None):
@@ -102,8 +100,6 @@ def plot_data_on_graph(G, periods, ax=None, sample=1000, save_path=None):
     if save_path is not None:
         plt.savefig(save_path, dpi=150)
         print(f"Saved data-on-graph plot to {save_path}")
-    if fig:
-        plt.show()
 
 
 def check_node_assignment(G, periods, n=10):

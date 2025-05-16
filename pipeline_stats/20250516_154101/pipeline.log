@@ -1,0 +1,114 @@
+2025-05-16 15:41:02,380 INFO Random seed set to 42
+2025-05-16 15:41:02,848 INFO Saved pip freeze to pipeline_stats/20250516_154101/environment.txt
+2025-05-16 15:41:02,848 INFO Loading filtered_points_in_beijing.parquet...
+2025-05-16 15:41:03,945 INFO Computing IQR-based thresholds for time gaps and speeds...
+2025-05-16 15:41:05,022 INFO Thresholds: time_gap=105.00 sec, speed=146.81 kph
+2025-05-16 15:41:05,022 INFO Computing time, distance, speed, and abnormality flags...
+2025-05-16 15:41:05,023 INFO Collecting base DataFrame (this may take a while)...
+2025-05-16 15:41:10,861 INFO Base DataFrame shape: (12667620, 12)
+2025-05-16 15:41:10,862 INFO Detecting trajectory outliers (Isolation Forest, parallel, reproducible)...
+2025-05-16 15:44:25,464 INFO Filtering out taxis with any temporal gap or position jump...
+2025-05-16 15:44:25,903 INFO Cleaned DataFrame shape: (5378468, 11)
+2025-05-16 15:44:25,903 WARNING Cleaned DataFrame contains nulls.
+2025-05-16 15:44:28,284 INFO Saved Cleaned points to data/cleaned_points_in_beijing_20250516_154101.parquet (shape: (5378468, 11))
+2025-05-16 15:44:29,178 INFO Adding period_id and summarizing periods...
+2025-05-16 15:44:29,970 INFO Filtered out 6261 periods with NaN SLD ratio after summarization.
+2025-05-16 15:44:29,971 INFO Period summary shape: (25600, 16)
+2025-05-16 15:44:29,971 INFO Attaching period_id to cleaned points...
+2025-05-16 15:44:31,581 INFO Cleaned with period_id shape: (4369809, 14)
+2025-05-16 15:44:37,284 INFO Saved Cleaned points with period_id to data/cleaned_with_period_id_in_beijing_20250516_154101.parquet (shape: (4369809, 14))
+2025-05-16 15:44:37,599 INFO Computing per-period outlier counts...
+2025-05-16 15:44:38,481 INFO Flagging SLD-based outliers...
+2025-05-16 15:44:38,561 INFO Saved Period summary with SLD ratio and outlier flags to data/periods_with_sld_ratio_20250516_154101.parquet (shape: (25127, 20))
+2025-05-16 15:44:38,872 INFO [RECOMPUTE] OSM graph exists but is not up-to-date: beijing_drive.graphml
+2025-05-16 15:54:56,254 INFO [RECOMPUTE] OSM graph written: beijing_drive.graphml
+2025-05-16 15:54:56,392 INFO Filtering out 11497 periods with sum_distance < 1.0 km out of 25127 total.
+2025-05-16 15:55:34,672 INFO Node cache is invalid or missing; rebuilding node cache for current graph and periods.
+2025-05-16 15:55:34,685 INFO Caching nearest OSM nodes for 26012 unique points (batched, parallel)...
+2025-05-16 15:55:39,121 INFO Saved persistent node cache to network_checkpoints/point_to_node.parquet
+2025-05-16 15:55:39,204 INFO Processing 13630 new periods (skipping 0 already done).
+2025-05-16 15:55:40,951 INFO Computing shortest paths for 13577 unique node pairs (batched)...
+2025-05-16 15:55:46,180 WARNING Failed to compute shortest path for (1667135988, 11206734600): Node 11206734600 not reachable from 1667135988
+2025-05-16 15:55:49,845 WARNING Failed to compute shortest path for (8190434497, 9913910298): Node 9913910298 not reachable from 8190434497
+2025-05-16 15:56:13,741 WARNING Failed to compute shortest path for (9913910307, 2207734561): Node 2207734561 not reachable from 9913910307
+2025-05-16 15:56:14,137 WARNING Failed to compute shortest path for (726657615, 5622901819): Node 5622901819 not reachable from 726657615
+2025-05-16 15:56:24,164 WARNING Failed to compute shortest path for (331145793, 1597402911): Node 1597402911 not reachable from 331145793
+2025-05-16 15:56:31,265 WARNING Failed to compute shortest path for (6478149502, 5622901819): Node 5622901819 not reachable from 6478149502
+2025-05-16 15:56:33,367 WARNING Failed to compute shortest path for (9819460681, 1412740563): Node 1412740563 not reachable from 9819460681
+2025-05-16 15:56:35,354 WARNING Failed to compute shortest path for (8005884692, 12011908570): Node 12011908570 not reachable from 8005884692
+2025-05-16 15:57:12,349 WARNING Failed to compute shortest path for (5838289410, 9913910298): Node 9913910298 not reachable from 5838289410
+2025-05-16 15:57:20,059 WARNING Failed to compute shortest path for (4716729762, 8899604463): Node 8899604463 not reachable from 4716729762
+2025-05-16 15:57:31,478 WARNING Failed to compute shortest path for (2101011258, 3731047481): Node 3731047481 not reachable from 2101011258
+2025-05-16 15:57:42,702 WARNING Failed to compute shortest path for (4898499156, 7202362928): Node 7202362928 not reachable from 4898499156
+2025-05-16 15:57:56,917 WARNING Failed to compute shortest path for (1549077224, 9162437055): Node 9162437055 not reachable from 1549077224
+2025-05-16 15:58:37,231 WARNING Failed to compute shortest path for (321760756, 11880252578): Node 11880252578 not reachable from 321760756
+2025-05-16 15:58:37,795 WARNING Failed to compute shortest path for (975801331, 7030909280): Node 7030909280 not reachable from 975801331
+2025-05-16 15:59:21,934 WARNING Failed to compute shortest path for (2122594986, 3731047481): Node 3731047481 not reachable from 2122594986
+2025-05-16 15:59:34,848 WARNING Failed to compute shortest path for (608739005, 5622901819): Node 5622901819 not reachable from 608739005
+2025-05-16 15:59:54,554 WARNING Failed to compute shortest path for (1734287114, 9913910298): Node 9913910298 not reachable from 1734287114
+2025-05-16 16:00:21,989 WARNING Failed to compute shortest path for (9079076033, 1460425642): Node 1460425642 not reachable from 9079076033
+2025-05-16 16:00:22,435 WARNING Failed to compute shortest path for (4716729762, 656069684): Node 656069684 not reachable from 4716729762
+2025-05-16 16:00:35,795 WARNING Failed to compute shortest path for (2465480264, 5622901819): Node 5622901819 not reachable from 2465480264
+2025-05-16 16:00:38,622 WARNING Failed to compute shortest path for (4716729762, 4137631319): Node 4137631319 not reachable from 4716729762
+2025-05-16 16:00:39,126 WARNING Failed to compute shortest path for (4716729763, 1375581678): Node 1375581678 not reachable from 4716729763
+2025-05-16 16:00:56,069 WARNING Failed to compute shortest path for (7840263631, 11880252578): Node 11880252578 not reachable from 7840263631
+2025-05-16 16:00:58,095 WARNING Failed to compute shortest path for (10716426743, 10867710826): Node 10867710826 not reachable from 10716426743
+2025-05-16 16:01:00,025 WARNING Failed to compute shortest path for (2207731637, 5622901819): Node 5622901819 not reachable from 2207731637
+2025-05-16 16:01:50,293 WARNING Failed to compute shortest path for (2199270052, 9913910298): Node 9913910298 not reachable from 2199270052
+2025-05-16 16:02:35,729 WARNING Failed to compute shortest path for (2115201444, 5622901819): Node 5622901819 not reachable from 2115201444
+2025-05-16 16:02:47,436 WARNING Failed to compute shortest path for (1349115345, 4966029189): Node 4966029189 not reachable from 1349115345
+2025-05-16 16:02:59,984 WARNING Failed to compute shortest path for (11112105609, 2592602560): Node 2592602560 not reachable from 11112105609
+2025-05-16 16:03:10,364 WARNING Failed to compute shortest path for (1808258801, 5622901819): Node 5622901819 not reachable from 1808258801
+2025-05-16 16:03:15,361 WARNING Failed to compute shortest path for (296298425, 1634360685): Node 1634360685 not reachable from 296298425
+2025-05-16 16:03:32,648 WARNING Failed to compute shortest path for (321794664, 11880252578): Node 11880252578 not reachable from 321794664
+2025-05-16 16:03:35,032 WARNING Failed to compute shortest path for (4716729762, 528980606): Node 528980606 not reachable from 4716729762
+2025-05-16 16:03:43,218 WARNING Failed to compute shortest path for (10771669781, 9913910298): Node 9913910298 not reachable from 10771669781
+2025-05-16 16:03:54,106 WARNING Failed to compute shortest path for (10000921331, 8900107268): Node 8900107268 not reachable from 10000921331
+2025-05-16 16:03:58,936 WARNING Failed to compute shortest path for (1667652100, 12406685302): Node 12406685302 not reachable from 1667652100
+2025-05-16 16:03:58,947 WARNING Failed to compute shortest path for (8282893762, 9913910298): Node 9913910298 not reachable from 8282893762
+2025-05-16 16:04:06,038 WARNING Failed to compute shortest path for (10000921331, 8278912568): Node 8278912568 not reachable from 10000921331
+2025-05-16 16:04:39,420 WARNING Failed to compute shortest path for (1772777225, 1719003215): Node 1719003215 not reachable from 1772777225
+2025-05-16 16:04:49,919 WARNING Failed to compute shortest path for (1360093875, 1351023857): Node 1351023857 not reachable from 1360093875
+2025-05-16 16:05:01,593 WARNING Failed to compute shortest path for (1819087313, 606803120): Node 606803120 not reachable from 1819087313
+2025-05-16 16:05:16,517 WARNING Failed to compute shortest path for (9136834243, 1765018144): Node 1765018144 not reachable from 9136834243
+2025-05-16 16:05:20,009 WARNING Failed to compute shortest path for (5715300430, 9913910298): Node 9913910298 not reachable from 5715300430
+2025-05-16 16:05:33,878 WARNING Failed to compute shortest path for (4716729762, 6375403711): Node 6375403711 not reachable from 4716729762
+2025-05-16 16:05:35,945 WARNING Failed to compute shortest path for (1360093875, 4718110487): Node 4718110487 not reachable from 1360093875
+2025-05-16 16:06:02,555 WARNING Failed to compute shortest path for (12011908569, 11434514129): Node 11434514129 not reachable from 12011908569
+2025-05-16 16:06:21,306 WARNING Failed to compute shortest path for (11100988363, 9913910298): Node 9913910298 not reachable from 11100988363
+2025-05-16 16:06:21,596 WARNING Failed to compute shortest path for (6122630135, 2490851825): Node 2490851825 not reachable from 6122630135
+2025-05-16 16:06:21,680 INFO Checkpointed batch 1 (500 periods).
+2025-05-16 16:06:21,899 INFO Checkpointed batch 2 (500 periods).
+2025-05-16 16:06:22,115 INFO Checkpointed batch 3 (500 periods).
+2025-05-16 16:06:22,316 INFO Checkpointed batch 4 (500 periods).
+2025-05-16 16:06:22,566 INFO Checkpointed batch 5 (500 periods).
+2025-05-16 16:06:22,807 INFO Checkpointed batch 6 (500 periods).
+2025-05-16 16:06:23,034 INFO Checkpointed batch 7 (500 periods).
+2025-05-16 16:06:23,298 INFO Checkpointed batch 8 (500 periods).
+2025-05-16 16:06:23,613 INFO Checkpointed batch 9 (500 periods).
+2025-05-16 16:06:23,933 INFO Checkpointed batch 10 (500 periods).
+2025-05-16 16:06:24,265 INFO Checkpointed batch 11 (500 periods).
+2025-05-16 16:06:24,596 INFO Checkpointed batch 12 (500 periods).
+2025-05-16 16:06:24,922 INFO Checkpointed batch 13 (500 periods).
+2025-05-16 16:06:25,259 INFO Checkpointed batch 14 (500 periods).
+2025-05-16 16:06:25,672 INFO Checkpointed batch 15 (500 periods).
+2025-05-16 16:06:26,016 INFO Checkpointed batch 16 (500 periods).
+2025-05-16 16:06:26,307 INFO Checkpointed batch 17 (500 periods).
+2025-05-16 16:06:26,576 INFO Checkpointed batch 18 (500 periods).
+2025-05-16 16:06:26,847 INFO Checkpointed batch 19 (500 periods).
+2025-05-16 16:06:27,118 INFO Checkpointed batch 20 (500 periods).
+2025-05-16 16:06:27,396 INFO Checkpointed batch 21 (500 periods).
+2025-05-16 16:06:27,667 INFO Checkpointed batch 22 (500 periods).
+2025-05-16 16:06:28,003 INFO Checkpointed batch 23 (500 periods).
+2025-05-16 16:06:28,523 INFO Checkpointed batch 24 (500 periods).
+2025-05-16 16:06:28,969 INFO Checkpointed batch 25 (500 periods).
+2025-05-16 16:06:29,347 INFO Checkpointed batch 26 (500 periods).
+2025-05-16 16:06:29,726 INFO Checkpointed batch 27 (500 periods).
+2025-05-16 16:06:30,108 INFO Checkpointed batch 28 (130 periods).
+2025-05-16 16:06:30,161 INFO Filtering out 1173 periods with failed or degenerate network path computation (NaN or <1km).
+2025-05-16 16:06:30,181 INFO Saved network_shortest_paths statistics to pipeline_stats/20250516_154101/network_shortest_paths_stats_20250516_160630.json
+2025-05-16 16:06:30,414 INFO Saved final results to data/periods_with_network_ratio_20250516_154101.parquet
+2025-05-16 16:06:30,837 INFO Network ratio outlier threshold: 1.68 (Q1=1.01, Q3=1.28, IQR=0.27)
+2025-05-16 16:06:30,837 INFO Found 1603 network outliers out of 12457 valid ratios
+2025-05-16 16:06:30,838 INFO Saved network_outlier_flag statistics to pipeline_stats/20250516_154101/network_outlier_flag_stats_20250516_160630.json
+2025-05-16 16:06:31,140 INFO Pipeline completed: all parquet files written.

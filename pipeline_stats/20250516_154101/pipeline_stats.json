@@ -1,0 +1,81 @@
+{
+  "run_id": "20250516_154101",
+  "steps": {
+    "cleaned_points": {
+      "n_total": 5378468
+    },
+    "cleaned_with_period_id": {
+      "n_total": 4369809
+    },
+    "periods_with_sld_ratio": {
+      "n_total": 25127
+    },
+    "network_outlier_flag": {
+      "n_total": 12457
+    }
+  },
+  "indicator_overlaps": {
+    "is_traj_outlier": {
+      "n_flagged": 4,
+      "flagged_pct": 0.032110459982339246
+    },
+    "is_sld_outlier": {
+      "n_flagged": 17,
+      "flagged_pct": 0.1364694549249418
+    },
+    "is_traj_outlier & is_sld_outlier": {
+      "n_flagged": 0,
+      "flagged_pct": 0.0
+    },
+    "is_network_outlier": {
+      "n_flagged": 1603,
+      "flagged_pct": 12.868266837922453
+    },
+    "is_traj_outlier & is_network_outlier": {
+      "n_flagged": 0,
+      "flagged_pct": 0.0
+    },
+    "is_sld_outlier & is_network_outlier": {
+      "n_flagged": 13,
+      "flagged_pct": 0.10435899494260255
+    },
+    "is_traj_outlier & is_sld_outlier & is_network_outlier": {
+      "n_flagged": 0,
+      "flagged_pct": 0.0
+    }
+  },
+  "filtering": {
+    "base_cleaning": {
+      "before": 12667620,
+      "after": 12667620,
+      "filtered": 0,
+      "filtered_pct": 0.0,
+      "criteria": "Initial cleaning and feature engineering"
+    },
+    "remove_temporal_gap_or_jump": {
+      "before": 12667620,
+      "after": 5378468,
+      "filtered": 7289152,
+      "filtered_pct": 57.541606079121415,
+      "criteria": "Remove taxis with any temporal gap or position jump"
+    },
+    "min_period_points": {
+      "before": 33142,
+      "after": 31861,
+      "filtered": 1281,
+      "filtered_pct": 3.8651861686078086,
+      "criteria": "Remove periods with <3 points"
+    },
+    "nan_sld_ratio": {
+      "before": 31861,
+      "after": 25600,
+      "filtered": 6261,
+      "filtered_pct": 19.650983961583126,
+      "criteria": "Remove periods with NaN SLD ratio"
+    }
+  },
+  "meta": {
+    "git_commit": "69e0f33ae0d49e27020df7d27bb630bda3145b35",
+    "env_file": "pipeline_stats/20250516_154101/environment.txt"
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "run_id": "20250516_162916",
+  "steps": {
+    "cleaned_points": {
+      "n_total": 5378468
+    },
+    "cleaned_with_period_id": {
+      "n_total": 4369809
+    },
+    "periods_with_sld_ratio": {
+      "n_total": 25127
+    },
+    "network_outlier_flag": {
+      "n_total": 12457
+    }
+  },
+  "indicator_overlaps": {
+    "is_traj_outlier": {
+      "n_flagged": 4,
+      "flagged_pct": 0.032110459982339246
+    },
+    "is_sld_outlier": {
+      "n_flagged": 17,
+      "flagged_pct": 0.1364694549249418
+    },
+    "is_traj_outlier & is_sld_outlier": {
+      "n_flagged": 0,
+      "flagged_pct": 0.0
+    },
+    "is_network_outlier": {
+      "n_flagged": 1603,
+      "flagged_pct": 12.868266837922453
+    },
+    "is_traj_outlier & is_network_outlier": {
+      "n_flagged": 0,
+      "flagged_pct": 0.0
+    },
+    "is_sld_outlier & is_network_outlier": {
+      "n_flagged": 13,
+      "flagged_pct": 0.10435899494260255
+    },
+    "is_traj_outlier & is_sld_outlier & is_network_outlier": {
+      "n_flagged": 0,
+      "flagged_pct": 0.0
+    }
+  },
+  "filtering": {},
+  "meta": {
+    "git_commit": "69e0f33ae0d49e27020df7d27bb630bda3145b35",
+    "env_file": "pipeline_stats/20250516_162916/environment.txt"
+  }
+}
