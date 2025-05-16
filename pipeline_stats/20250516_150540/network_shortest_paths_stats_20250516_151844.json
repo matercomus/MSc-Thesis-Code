@@ -1,0 +1,35 @@
+{
+  "total_periods": 31603,
+  "filtered_short_periods": 17834,
+  "after_short_filter": 13769,
+  "graph_info": {
+    "nodes": 160078,
+    "edges": 398838
+  },
+  "node_assignment": {
+    "total_points": 0,
+    "successful_assignments": 0,
+    "failed_assignments": 0
+  },
+  "path_computation": {
+    "total_pairs": 0,
+    "successful_paths": 0,
+    "failed_paths": 0,
+    "same_node_pairs": 0
+  },
+  "distance_stats": {
+    "min": 1.0007261947821209,
+    "max": 78.73826851535584,
+    "mean": 11.043551337996988,
+    "median": 7.629891450224431
+  },
+  "ratio_stats": {
+    "min": 0.11550622752687291,
+    "max": 53.62208554605759,
+    "mean": 1.4714767768676902,
+    "median": 1.0851277527444338,
+    "nan_count": "602"
+  },
+  "filtered_failed_periods": 1186,
+  "final_periods": 12583
+}

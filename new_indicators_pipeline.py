@@ -75,7 +75,7 @@ def attach_period_id(cleaned_df: pl.DataFrame, period_df: pl.DataFrame) -> pl.Da
 def ensure_osm_graph(osm_graph_path, periods_path, buffer=None, output_dir="pipeline_stats"):
     """
     Ensure the OSMnx graph is downloaded and covers the data bounding box.
-    Buffer can be set via argument or OSM_GRAPH_BUFFER env var (default 0.05).
+    Buffer can be set via argument or OSM_GRAPH_BUFFER env var (default 1.0).
     If the graph is too small, try larger buffers, then fallback to Beijing city graph.
     output_dir: directory to save stats (for testability)
     Returns: (action, output_file)
@@ -99,7 +99,7 @@ def ensure_osm_graph(osm_graph_path, periods_path, buffer=None, output_dir="pipe
     # Buffer: argument > env var > default
     tried_buffers = []
     if buffer is None:
-        buffer = float(os.environ.get("OSM_GRAPH_BUFFER", 0.05))
+        buffer = float(os.environ.get("OSM_GRAPH_BUFFER", 1.0))
     for try_buffer in [buffer, 0.5, 1.0]:
         tried_buffers.append(try_buffer)
         bbox = (max_lat + try_buffer, min_lat - try_buffer, max_lon + try_buffer, min_lon - try_buffer)
@@ -221,6 +221,16 @@ def compute_network_shortest_paths_batched(
 
     # Load periods
     periods_df = pd.read_parquet(periods_path)
+
+    # --- FILTER OUT SHORT PERIODS (<1km) ---
+    n_total_periods = len(periods_df)
+    short_periods_mask = periods_df['sum_distance'] < 1.0
+    n_short_periods = short_periods_mask.sum()
+    if n_short_periods > 0:
+        logging.info(f"Filtering out {n_short_periods} periods with sum_distance < 1.0 km out of {n_total_periods} total.")
+    periods_df = periods_df[~short_periods_mask].copy()
+    n_after_short_filter = len(periods_df)
+
     G = ox.load_graphml(osm_graph_path)
     
     # --- Persistent node cache logic (vectorized, batched, parallel) ---
@@ -239,6 +249,7 @@ def compute_network_shortest_paths_batched(
         node_df = pd.read_parquet(node_cache_path)
         point_to_node = {(row.lat, row.lon): row.node for row in node_df.itertuples(index=False)}
     else:
+        logger.info("Node cache is invalid or missing; rebuilding node cache for current graph and periods.")
         # Precompute/caching nearest nodes for all unique points (vectorized, batched, parallel)
         all_points = list(set(
             list(zip(periods_df['start_latitude'], periods_df['start_longitude'])) +
@@ -275,7 +286,9 @@ def compute_network_shortest_paths_batched(
 
     # Initialize statistics
     stats = {
-        "total_periods": len(periods_df),
+        "total_periods": n_total_periods,
+        "filtered_short_periods": int(n_short_periods),
+        "after_short_filter": int(n_after_short_filter),
         "graph_info": {
             "nodes": len(G.nodes),
             "edges": len(G.edges),
@@ -329,45 +342,41 @@ def compute_network_shortest_paths_batched(
     node_pairs = set(zip(to_process['start_node'], to_process['end_node']))
     node_pair_to_dist = {}
 
+    # --- BATCHED NODE PAIR SHORTEST PATHS ---
     def compute_pair(pair):
         orig, dest = pair
         if orig is None or dest is None:
             return pair, float('nan')
         if orig == dest:
-            # For same node, use a small distance (1 meter = 0.001 km)
-            return pair, 0.001
+            # For same node, skip (will be filtered out later)
+            return pair, float('nan')
         try:
             dist = nx.shortest_path_length(G, orig, dest, weight='length') / 1000
-            if dist < 0.001:  # Less than 1 meter
-                dist = 0.001  # Set minimum distance to 1 meter
             return pair, dist
         except Exception as e:
             logger.warning(f"Failed to compute shortest path for {pair}: {e}")
             return pair, float('nan')
 
-    # Use ThreadPoolExecutor to avoid pickling issues
-    logger.info(f"Computing shortest paths for {len(node_pairs)} unique node pairs...")
-    with ThreadPoolExecutor(max_workers=num_workers) as executor:
-        future_to_pair = {executor.submit(compute_pair, pair): pair for pair in node_pairs}
-        for future in tqdm(as_completed(future_to_pair), total=len(node_pairs), desc="Node pairs"):
-            pair, dist = future.result()
-            node_pair_to_dist[pair] = dist
+    logger.info(f"Computing shortest paths for {len(node_pairs)} unique node pairs (batched)...")
+    node_pairs = list(node_pairs)
+    batch_size_pairs = 1000
+    for i in tqdm(range(0, len(node_pairs), batch_size_pairs), desc="Node pair batches"):
+        batch_pairs = node_pairs[i:i+batch_size_pairs]
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            futures = {executor.submit(compute_pair, pair): pair for pair in batch_pairs}
+            for future in as_completed(futures):
+                pair, dist = future.result()
+                node_pair_to_dist[pair] = dist
 
     # Assign distances to periods
     def get_dist(row):
-        # Skip if start/end node is None
         if row['start_node'] is None or row['end_node'] is None:
             return float('nan')
-        # For very small actual distances, use minimum network distance
-        if row['sum_distance'] < 0.001:
-            return 0.001
         return node_pair_to_dist.get((row['start_node'], row['end_node']), float('nan'))
 
-    # Process in batches
     all_results = []
     all_distances = []
     all_ratios = []
-    
     for i in tqdm(range(0, len(to_process), batch_size), desc="Batches"):
         batch = to_process.iloc[i:i+batch_size]
         batch['network_shortest_distance'] = batch.apply(get_dist, axis=1)
@@ -378,15 +387,12 @@ def compute_network_shortest_paths_batched(
             else float('nan'),
             axis=1
         )
-        
-        # Collect statistics
+        all_results.append(batch)
         valid_distances = batch['network_shortest_distance'].dropna()
         valid_ratios = batch['route_deviation_ratio'].replace([np.inf, -np.inf], np.nan).dropna()
         all_distances.extend(valid_distances)
         all_ratios.extend(valid_ratios)
         stats["ratio_stats"]["nan_count"] += batch['route_deviation_ratio'].isna().sum()
-        
-        all_results.append(batch)
         # Save checkpoint
         if os.path.exists(checkpoint_file):
             prev = pd.read_parquet(checkpoint_file)
@@ -399,29 +405,41 @@ def compute_network_shortest_paths_batched(
     if not done_df.empty:
         all_results.append(done_df)
     final_df = pd.concat(all_results, ignore_index=True)
-    
+
+    # --- FILTER OUT FAILED/DEGENERATE PERIODS ---
+    n_before_failed_filter = len(final_df)
+    failed_mask = final_df['network_shortest_distance'].isna() | (final_df['network_shortest_distance'] < 1.0)
+    n_failed_periods = failed_mask.sum()
+    if n_failed_periods > 0:
+        logger.info(f"Filtering out {n_failed_periods} periods with failed or degenerate network path computation (NaN or <1km).")
+    final_df = final_df[~failed_mask].copy()
+    n_final = len(final_df)
+
+    # Update stats
+    stats["filtered_failed_periods"] = int(n_failed_periods)
+    stats["final_periods"] = int(n_final)
+
     # Compute final statistics
-    if all_distances:
+    if not final_df.empty:
         stats["distance_stats"].update({
-            "min": float(min(all_distances)),
-            "max": float(max(all_distances)),
-            "mean": float(np.mean(all_distances)),
-            "median": float(np.median(all_distances)),
+            "min": float(final_df['network_shortest_distance'].min()),
+            "max": float(final_df['network_shortest_distance'].max()),
+            "mean": float(final_df['network_shortest_distance'].mean()),
+            "median": float(final_df['network_shortest_distance'].median()),
         })
-    if all_ratios:
         stats["ratio_stats"].update({
-            "min": float(min(all_ratios)),
-            "max": float(max(all_ratios)),
-            "mean": float(np.mean(all_ratios)),
-            "median": float(np.median(all_ratios)),
+            "min": float(final_df['route_deviation_ratio'].min()),
+            "max": float(final_df['route_deviation_ratio'].max()),
+            "mean": float(final_df['route_deviation_ratio'].mean()),
+            "median": float(final_df['route_deviation_ratio'].median()),
         })
-    
+
     # Save statistics
     if run_id is not None:
         save_step_stats("network_shortest_paths", stats, run_id, output_dir=output_dir)
     else:
         save_step_stats("network_shortest_paths", stats, "default", output_dir=output_dir)
-    
+
     final_df.to_parquet(output_path)
     logger.info(f"Saved final results to {output_path}")
 
@@ -603,6 +621,14 @@ def main():
         parser.error("--clean-step and --reuse-latest cannot be used together.")
     if args.clean:
         clean_pipeline_outputs()
+        logging.info("[CLEAN RUN] --clean specified: all outputs, meta, and checkpoints have been deleted. This will be a fully clean run: no cache, checkpoints, or previous outputs will be reused. All steps will be recomputed from scratch.")
+        # Forcibly disable all reuse logic for this run
+        args.reuse_latest = False
+        reuse_cleaned_points = False
+        reuse_cleaned_with_pid = False
+        reuse_periods_sld = False
+        reuse_network_ratio = False
+        reuse_final_periods = False
     if args.clean_step:
         steps = [s.strip() for s in args.clean_step.split(",")]
         for step in steps:
@@ -672,8 +698,9 @@ def main():
     cleaned_points_meta = cleaned_points_path + ".meta.json"
     filtered_points_path = "data/filtered_points_in_beijing.parquet"
     input_paths = {"filtered_points_hash": filtered_points_path}
-    reuse_cleaned_points = False
-    reused_from = None
+    if not args.clean:
+        reuse_cleaned_points = False
+        reused_from = None
     if args.reuse_latest and not os.path.exists(cleaned_points_path):
         latest = find_latest_output("data/cleaned_points_in_beijing_*.parquet")
         if latest and is_up_to_date(latest, input_paths):
@@ -696,7 +723,7 @@ def main():
             step_info["status"] = "reused"
             step_info["reused_from"] = reused_from
             step_info["output_path"] = cleaned_points_path
-    if not reuse_cleaned_points:
+    if args.clean or not reuse_cleaned_points:
         # Load filtered points
         logging.info("Loading filtered_points_in_beijing.parquet...")
         lazy_df = pl.scan_parquet(filtered_points_path)
@@ -760,8 +787,9 @@ def main():
     cleaned_with_pid_path = f"data/cleaned_with_period_id_in_beijing_{run_id}.parquet"
     cleaned_with_pid_meta = cleaned_with_pid_path + ".meta.json"
     input_paths = {"cleaned_points_hash": cleaned_points_path}
-    reuse_cleaned_with_pid = False
-    reused_from = None
+    if not args.clean:
+        reuse_cleaned_with_pid = False
+        reused_from = None
     if args.reuse_latest and not os.path.exists(cleaned_with_pid_path):
         latest = find_latest_output("data/cleaned_with_period_id_in_beijing_*.parquet")
         if latest and is_up_to_date(latest, input_paths):
@@ -784,7 +812,7 @@ def main():
             step_info["status"] = "reused"
             step_info["reused_from"] = reused_from
             step_info["output_path"] = cleaned_with_pid_path
-    if not reuse_cleaned_with_pid:
+    if args.clean or not reuse_cleaned_with_pid:
         # Add period_id and summarize periods
         logging.info("Adding period_id and summarizing periods...")
         period_df = cleaned_df.pipe(add_period_id).pipe(summarize_periods)
@@ -814,8 +842,9 @@ def main():
     periods_sld_path = f"data/periods_with_sld_ratio_{run_id}.parquet"
     periods_sld_meta = periods_sld_path + ".meta.json"
     input_paths = {"cleaned_with_pid_hash": cleaned_with_pid_path}
-    reuse_periods_sld = False
-    reused_from = None
+    if not args.clean:
+        reuse_periods_sld = False
+        reused_from = None
     if args.reuse_latest and not os.path.exists(periods_sld_path):
         latest = find_latest_output("data/periods_with_sld_ratio_*.parquet")
         if latest and is_up_to_date(latest, input_paths):
@@ -838,7 +867,7 @@ def main():
             step_info["status"] = "reused"
             step_info["reused_from"] = reused_from
             step_info["output_path"] = periods_sld_path
-    if not reuse_periods_sld:
+    if args.clean or not reuse_periods_sld:
         # Compute per-period outlier counts (Isolation Forest)
         logging.info("Computing per-period outlier counts...")
         outlier_stats = (
@@ -881,40 +910,60 @@ def main():
     action, osm_graph_path = ensure_osm_graph("beijing_drive.graphml", periods_sld_path)
     # 2. Compute network shortest paths and ratios (batched, threaded, checkpointed)
     network_ratio_path = f"data/periods_with_network_ratio_{run_id}.parquet"
-    reuse_network_ratio = False
-    input_paths = {"periods_sld_hash": periods_sld_path}
-    if args.reuse_latest and not os.path.exists(network_ratio_path):
-        latest = find_latest_output("data/periods_with_network_ratio_*.parquet")
-        if latest and is_up_to_date(latest, input_paths):
-            logging.info(f"[REUSE] Using {latest} for network_ratio step.")
-            network_ratio_path = latest
-            reuse_network_ratio = True
-            reused_from = latest
-    compute_network_shortest_paths_batched(
-        periods_path=periods_sld_path,
-        osm_graph_path=osm_graph_path,
-        output_path=network_ratio_path,
-        batch_size=500,
-        num_workers=8,
-        checkpoint_dir="network_checkpoints",
-        run_id=run_id
-    )
+    if not args.clean:
+        reuse_network_ratio = False
+        input_paths = {"periods_sld_hash": periods_sld_path}
+        if args.reuse_latest and not os.path.exists(network_ratio_path):
+            latest = find_latest_output("data/periods_with_network_ratio_*.parquet")
+            if latest and is_up_to_date(latest, input_paths):
+                logging.info(f"[REUSE] Using {latest} for network_ratio step.")
+                network_ratio_path = latest
+                reuse_network_ratio = True
+                reused_from = latest
+        if args.clean or not reuse_network_ratio:
+            compute_network_shortest_paths_batched(
+                periods_path=periods_sld_path,
+                osm_graph_path=osm_graph_path,
+                output_path=network_ratio_path,
+                batch_size=500,
+                num_workers=8,
+                checkpoint_dir="network_checkpoints",
+                run_id=run_id
+            )
+    else:
+        compute_network_shortest_paths_batched(
+            periods_path=periods_sld_path,
+            osm_graph_path=osm_graph_path,
+            output_path=network_ratio_path,
+            batch_size=500,
+            num_workers=8,
+            checkpoint_dir="network_checkpoints",
+            run_id=run_id
+        )
     # 3. Compute threshold and flag outliers
     final_periods_path = f"data/periods_with_network_ratio_flagged_{run_id}.parquet"
-    reuse_final_periods = False
-    input_paths = {"network_ratio_hash": network_ratio_path}
-    if args.reuse_latest and not os.path.exists(final_periods_path):
-        latest = find_latest_output("data/periods_with_network_ratio_flagged_*.parquet")
-        if latest and is_up_to_date(latest, input_paths):
-            logging.info(f"[REUSE] Using {latest} for network_ratio_flagged step.")
-            final_periods_path = latest
-            reuse_final_periods = True
-            reused_from = latest
-    compute_network_outlier_flag(
-        input_path=network_ratio_path,
-        output_path=final_periods_path,
-        run_id=run_id
-    )
+    if not args.clean:
+        reuse_final_periods = False
+        input_paths = {"network_ratio_hash": network_ratio_path}
+        if args.reuse_latest and not os.path.exists(final_periods_path):
+            latest = find_latest_output("data/periods_with_network_ratio_flagged_*.parquet")
+            if latest and is_up_to_date(latest, input_paths):
+                logging.info(f"[REUSE] Using {latest} for network_ratio_flagged step.")
+                final_periods_path = latest
+                reuse_final_periods = True
+                reused_from = latest
+        if args.clean or not reuse_final_periods:
+            compute_network_outlier_flag(
+                input_path=network_ratio_path,
+                output_path=final_periods_path,
+                run_id=run_id
+            )
+    else:
+        compute_network_outlier_flag(
+            input_path=network_ratio_path,
+            output_path=final_periods_path,
+            run_id=run_id
+        )
     step_name = "network_outlier_flag"
     step_info = {"timestamp": datetime.now().isoformat()}
     if reuse_final_periods:
