@@ -198,14 +198,12 @@ def compute_network_shortest_paths_batched(
         
         # Define process_batch here so it can access G
         def process_batch(batch):
-            results = []
-            for lat, lon in batch:
-                try:
-                    node = ox.nearest_nodes(G, lon, lat)
-                except Exception:
-                    node = None
-                results.append(((lat, lon), node))
-            return results
+            lats, lons = zip(*batch)
+            try:
+                nodes = ox.nearest_nodes(G, lons, lats)  # vectorized
+            except Exception:
+                nodes = [None] * len(batch)
+            return list(zip(batch, nodes))
         
         with ThreadPoolExecutor(max_workers=node_cache_num_workers) as executor:
             futures = {executor.submit(process_batch, batch): batch for batch in batches}
