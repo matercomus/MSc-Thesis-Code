@@ -23,7 +23,7 @@ from utils import (
     select_final_columns,
     add_period_id,
     summarize_periods,
-    detect_outliers_parallel_by_group,
+    detect_outliers_pd,
     compute_iqr_thresholds,
     compute_generic_iqr_threshold,
     attach_period_id,
@@ -221,7 +221,7 @@ def main():
     # --- Outlier Detection (Isolation Forest, parallel by group) ---
     if cleaned_df is not None:
         pd_df = cleaned_df.to_pandas()
-        pd_df["is_outlier"] = detect_outliers_parallel_by_group(pd_df, group_col="license_plate").values
+        pd_df["is_outlier"] = detect_outliers_pd(pd_df, n_jobs=-1).values
         cleaned_df = pl.from_pandas(pd_df)
 
     # --- Step 2: Cleaned with period_id ---

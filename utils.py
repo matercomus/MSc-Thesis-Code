@@ -504,28 +504,6 @@ def detect_outliers_pd(
     result.loc[feat.index] = outlier_labels
     return result
 
-def detect_outliers_parallel_by_group(df: pd.DataFrame, group_col: str = 'license_plate', **kwargs) -> pd.Series:
-    """
-    Parallelize outlier detection across groups (e.g., per license_plate) using ThreadPoolExecutor.
-    Returns a pandas Series of 1 (inlier) or -1 (outlier) indexed by the input DataFrame index.
-    Usage:
-        result = detect_outliers_parallel_by_group(df, group_col='license_plate', contamination=0.05)
-    """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    groups = list(df.groupby(group_col, observed=False))
-    results = {}
-    def process_group(item):
-        name, group = item
-        return name, detect_outliers_pd(group, **kwargs)
-    with ThreadPoolExecutor() as executor:
-        futures = {executor.submit(process_group, item): item[0] for item in groups}
-        for fut in as_completed(futures):
-            name, res = fut.result()
-            results[name] = res
-    # Concatenate results in original order
-    outlier_series = pd.concat([results[name] for name in df[group_col].unique()])
-    return outlier_series.sort_index()
-
 def compute_iqr_thresholds(
     lazy_df: pl.LazyFrame,
     iqr_multiplier: float = 1.5
