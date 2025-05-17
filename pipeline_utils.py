@@ -71,35 +71,53 @@ class PipelineStats:
         if extra:
             self.stats["filtering"][step].update(extra)
 
-    def record_step_stats(self, step: str, df: pl.DataFrame, abnormal_col: Optional[str] = None):
-        n_total = df.height
+    def record_step_stats(self, step: str, df, abnormal_col: Optional[str] = None):
+        # Support both Polars and pandas DataFrames
+        if hasattr(df, 'height'):
+            n_total = df.height
+            columns = df.columns
+            get_abnormal = lambda col: df.filter(pl.col(col)).height
+        else:
+            n_total = len(df)
+            columns = df.columns
+            get_abnormal = lambda col: df[df[col]].shape[0]
         step_stats = {"n_total": n_total}
-        if abnormal_col and abnormal_col in df.columns:
-            n_abnormal = df.filter(pl.col(abnormal_col)).height
+        if abnormal_col and abnormal_col in columns:
+            n_abnormal = get_abnormal(abnormal_col)
             step_stats["n_abnormal"] = n_abnormal
             step_stats["abnormal_pct"] = 100.0 * n_abnormal / n_total if n_total > 0 else 0.0
         self.stats["steps"][step] = step_stats
 
-    def record_indicator_flags(self, df: pl.DataFrame, indicator_cols: List[str]):
+    def record_indicator_flags(self, df, indicator_cols: List[str]):
+        # Support both Polars and pandas DataFrames
+        if hasattr(df, 'height'):
+            n_total = df.height
+            columns = df.columns
+            get_flagged = lambda col: df.filter(pl.col(col)).height
+            get_combo = lambda combo: df.filter(
+                pl.lit(True).combine([pl.col(col) for col in combo], lambda *args: all(args))
+            ).height
+        else:
+            n_total = len(df)
+            columns = df.columns
+            get_flagged = lambda col: df[df[col]].shape[0]
+            get_combo = lambda combo: df[df[list(combo)].all(axis=1)].shape[0]
         # For each indicator, count flagged
         for col in indicator_cols:
-            if col in df.columns:
-                n_flagged = df.filter(pl.col(col)).height
+            if col in columns:
+                n_flagged = get_flagged(col)
                 self.stats["indicator_overlaps"][col] = {
                     "n_flagged": n_flagged,
-                    "flagged_pct": 100.0 * n_flagged / df.height if df.height > 0 else 0.0,
+                    "flagged_pct": 100.0 * n_flagged / n_total if n_total > 0 else 0.0,
                 }
         # For all combinations
         for r in range(2, len(indicator_cols) + 1):
             for combo in combinations(indicator_cols, r):
-                mask = pl.lit(True)
-                for col in combo:
-                    mask = mask & pl.col(col)
-                n_combo = df.filter(mask).height
+                n_combo = get_combo(combo)
                 key = " & ".join(combo)
                 self.stats["indicator_overlaps"][key] = {
                     "n_flagged": n_combo,
-                    "flagged_pct": 100.0 * n_combo / df.height if df.height > 0 else 0.0,
+                    "flagged_pct": 100.0 * n_combo / n_total if n_total > 0 else 0.0,
                 }
 
     def record_meta(self, key: str, value: Any):
