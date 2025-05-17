@@ -91,11 +91,13 @@ class PipelineStats:
     def record_indicator_flags(self, df, indicator_cols: List[str]):
         # Support both Polars and pandas DataFrames
         if hasattr(df, 'height'):
+            from functools import reduce
+            import operator
             n_total = df.height
             columns = df.columns
             get_flagged = lambda col: df.filter(pl.col(col)).height
             get_combo = lambda combo: df.filter(
-                pl.lit(True).combine([pl.col(col) for col in combo], lambda *args: all(args))
+                reduce(operator.and_, (pl.col(col) for col in combo))
             ).height
         else:
             n_total = len(df)
@@ -103,6 +105,7 @@ class PipelineStats:
             get_flagged = lambda col: df[df[col]].shape[0]
             get_combo = lambda combo: df[df[list(combo)].all(axis=1)].shape[0]
         # For each indicator, count flagged
+        indicator_flags = {}
         for col in indicator_cols:
             if col in columns:
                 n_flagged = get_flagged(col)
@@ -110,6 +113,8 @@ class PipelineStats:
                     "n_flagged": n_flagged,
                     "flagged_pct": 100.0 * n_flagged / n_total if n_total > 0 else 0.0,
                 }
+                indicator_flags[col] = n_flagged
+        self.stats["indicator_flags"] = indicator_flags
         # For all combinations
         for r in range(2, len(indicator_cols) + 1):
             for combo in combinations(indicator_cols, r):
@@ -496,6 +501,12 @@ def compute_network_shortest_paths_batched(
     logger.info(f"[MERGE] Merging {len(batch_files)} batch files into {output_path}")
     final_df = pl.concat([pl.read_parquet(f) for f in batch_files], rechunk=True)
     final_df.write_parquet(output_path)
+    # Write .meta.json for reuse logic
+    meta_path = str(output_path) + '.meta.json'
+    write_meta(meta_path, {
+        "periods_hash": file_hash(periods_path),
+        "osm_graph_hash": file_hash(osm_graph_path)
+    })
     for f in batch_files:
         os.remove(f)
     logger.info(f"[DONE] All batches processed and merged. Output written to {output_path}")
@@ -530,7 +541,7 @@ def clean_pipeline_outputs():
                 print(f"Could not delete {pq_file}: {e}")
     print("Clean complete.")
 
-def find_latest_output(pattern):
+def find_latest_output(pattern, input_paths=None):
     import glob
     import re
     files = glob.glob(pattern)
@@ -541,7 +552,13 @@ def find_latest_output(pattern):
         return m.group(1) if m else ''
     files = [(f, extract_runid(f)) for f in files]
     files = sorted(files, key=lambda x: x[1], reverse=True)
-    return files[0][0] if files else None
+    if input_paths is None:
+        return files[0][0] if files else None
+    # Search for the most recent up-to-date file
+    for f, _ in files:
+        if is_up_to_date(f, input_paths):
+            return f
+    return None
 
 def compute_network_outlier_flag(input_path, output_path, run_id):
     import pandas as pd
@@ -558,6 +575,12 @@ def compute_network_outlier_flag(input_path, output_path, run_id):
     threshold = q3 + 1.5 * iqr
     df["is_network_outlier"] = df["route_deviation_ratio"] > threshold
     df.to_parquet(output_path)
+
+    # Write .meta.json for reuse logic
+    meta_path = str(output_path) + '.meta.json'
+    write_meta(meta_path, {
+        "network_ratio_hash": file_hash(input_path)
+    })
 
     # Optionally save stats for reproducibility
     stats = {

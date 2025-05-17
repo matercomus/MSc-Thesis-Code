@@ -1,0 +1,20 @@
+{
+  "run_id": "20250517_103921",
+  "steps": {
+    "cleaned_points": {
+      "n_total": 12667620
+    },
+    "network_ratio": {
+      "n_total": 12642951
+    },
+    "network_outlier_flag": {
+      "n_total": 12642951
+    }
+  },
+  "indicator_overlaps": {},
+  "filtering": {},
+  "meta": {
+    "git_commit": "bb2c33362bd79c548badced524698f47992b2662",
+    "env_file": "pipeline_stats/20250517_103921/environment.txt"
+  }
+}

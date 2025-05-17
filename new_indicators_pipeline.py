@@ -107,6 +107,15 @@ def main():
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_stats_dir = os.path.join("pipeline_stats", run_id)
     os.makedirs(run_stats_dir, exist_ok=True)
+
+    # --- Define all step output paths early ---
+    cleaned_points_path = f"data/cleaned_points_in_beijing_{run_id}.parquet"
+    cleaned_points_meta = cleaned_points_path + ".meta.json"
+    cleaned_with_pid_path = f"data/cleaned_with_period_id_in_beijing_{run_id}.parquet"
+    cleaned_with_pid_meta = cleaned_with_pid_path + ".meta.json"
+    periods_sld_path = f"data/periods_with_sld_ratio_{run_id}.parquet"
+    periods_sld_meta = periods_sld_path + ".meta.json"
+
     # --- Write LAST_RUN_ID file early for crash-resistance ---
     with open(os.path.join("pipeline_stats", "LAST_RUN_ID"), "w") as f:
         f.write(run_id)
@@ -166,8 +175,6 @@ def main():
     step_name = "cleaned_points"
     step_info = {"timestamp": datetime.now().isoformat()}
     cleaned_df = None  # Initialize to None
-    cleaned_points_path = f"data/cleaned_points_in_beijing_{run_id}.parquet"
-    cleaned_points_meta = cleaned_points_path + ".meta.json"
     filtered_points_path = "data/filtered_points_in_beijing.parquet"
     input_paths = {"filtered_points_hash": filtered_points_path}
     reused_from = None
@@ -180,29 +187,23 @@ def main():
         step_info["output_path"] = cleaned_points_path
     else:
         # Try to reuse latest or existing
-        if args.reuse_latest and not os.path.exists(cleaned_points_path):
-            latest = find_latest_output("data/cleaned_points_in_beijing_*.parquet")
-            if latest and is_up_to_date(latest, input_paths):
-                logging.info(f"[REUSE] Using {latest} for {step_name} step")
-                cleaned_points_path = latest
-                cleaned_points_meta = cleaned_points_path + ".meta.json"
-                reused_from = latest
+        latest = find_latest_output("data/cleaned_points_in_beijing_*.parquet", input_paths)
+        if latest:
+            logging.info(f"[REUSE] Using {latest} for {step_name} step")
+            cleaned_points_path = latest
+            cleaned_points_meta = cleaned_points_path + ".meta.json"
+            reused_from = latest
 
         if is_up_to_date(cleaned_points_path, input_paths):
             logging.info(f"[SKIP] {cleaned_points_path} is up-to-date")
-            cleaned_df = pl.read_parquet(cleaned_points_path)
-            if cleaned_df.is_empty():
-                warning = f"Reused {step_name} is empty. Recomputing."
-                logging.warning(warning)
-                step_info["status"] = "recomputed_due_to_empty"
-                step_info["warning"] = warning
-                cleaned_df = run_cleaned_points(filtered_points_path, cleaned_points_path, cleaned_points_meta, step_name, stats, args)
-                step_info["status"] = "recomputed"
-                step_info["output_path"] = cleaned_points_path
+            # Only load if needed for next step
+            if not is_up_to_date(cleaned_with_pid_path, {"cleaned_points_hash": cleaned_points_path}):
+                cleaned_df = pl.read_parquet(cleaned_points_path)
             else:
-                step_info["status"] = "reused"
-                step_info["reused_from"] = reused_from
-                step_info["output_path"] = cleaned_points_path
+                cleaned_df = None
+            step_info["status"] = "reused"
+            step_info["reused_from"] = reused_from
+            step_info["output_path"] = cleaned_points_path
         else:
             logging.info(f"[COMPUTE] Computing {step_name} from scratch")
             cleaned_df = run_cleaned_points(filtered_points_path, cleaned_points_path, cleaned_points_meta, step_name, stats, args)
@@ -214,12 +215,7 @@ def main():
     save_metadata()
     if cleaned_df is not None:
         stats.record_step_stats("cleaned_points", cleaned_df)
-    # Update LAST_RUN_ID after step (extra robustness)
-    with open(os.path.join("pipeline_stats", "LAST_RUN_ID"), "w") as f:
-        f.write(run_id)
-
-    # --- Outlier Detection (Isolation Forest, parallel by group) ---
-    if cleaned_df is not None:
+        # --- Outlier Detection (Isolation Forest, parallel by group) ---
         pd_df = cleaned_df.to_pandas()
         pd_df["is_outlier"] = detect_outliers_pd(pd_df, n_jobs=-1).values
         cleaned_df = pl.from_pandas(pd_df)
@@ -228,8 +224,6 @@ def main():
     step_name = "cleaned_with_period_id"
     step_info = {"timestamp": datetime.now().isoformat()}
     cleaned_with_period_id = None  # Initialize to None
-    cleaned_with_pid_path = f"data/cleaned_with_period_id_in_beijing_{run_id}.parquet"
-    cleaned_with_pid_meta = cleaned_with_pid_path + ".meta.json"
     input_paths = {"cleaned_points_hash": cleaned_points_path}
     reused_from = None
 
@@ -240,8 +234,8 @@ def main():
         step_info["output_path"] = cleaned_with_pid_path
     else:
         if args.reuse_latest and not os.path.exists(cleaned_with_pid_path):
-            latest = find_latest_output("data/cleaned_with_period_id_in_beijing_*.parquet")
-            if latest and is_up_to_date(latest, input_paths):
+            latest = find_latest_output("data/cleaned_with_period_id_in_beijing_*.parquet", input_paths)
+            if latest:
                 logging.info(f"[REUSE] Using {latest} for {step_name} step")
                 cleaned_with_pid_path = latest
                 cleaned_with_pid_meta = cleaned_with_pid_path + ".meta.json"
@@ -249,7 +243,11 @@ def main():
 
         if is_up_to_date(cleaned_with_pid_path, input_paths):
             logging.info(f"[SKIP] {cleaned_with_pid_path} is up-to-date")
-            cleaned_with_period_id = pl.read_parquet(cleaned_with_pid_path)
+            # Only load if needed for next step
+            if not is_up_to_date(periods_sld_path, {"cleaned_with_pid_hash": cleaned_with_pid_path}):
+                cleaned_with_period_id = pl.read_parquet(cleaned_with_pid_path)
+            else:
+                cleaned_with_period_id = None
             step_info["status"] = "reused"
             step_info["reused_from"] = reused_from
             step_info["output_path"] = cleaned_with_pid_path
@@ -269,8 +267,6 @@ def main():
     step_name = "periods_with_sld_ratio"
     step_info = {"timestamp": datetime.now().isoformat()}
     period_df = None  # Initialize to None
-    periods_sld_path = f"data/periods_with_sld_ratio_{run_id}.parquet"
-    periods_sld_meta = periods_sld_path + ".meta.json"
     input_paths = {"cleaned_with_pid_hash": cleaned_with_pid_path}
     reused_from = None
 
@@ -281,15 +277,19 @@ def main():
         step_info["output_path"] = periods_sld_path
     else:
         if args.reuse_latest and not os.path.exists(periods_sld_path):
-            latest = find_latest_output("data/periods_with_sld_ratio_*.parquet")
-            if latest and is_up_to_date(latest, input_paths):
+            latest = find_latest_output("data/periods_with_sld_ratio_*.parquet", input_paths)
+            if latest:
                 logging.info(f"[REUSE] Using {latest} for {step_name} step")
                 periods_sld_path = latest
                 reused_from = latest
 
         if is_up_to_date(periods_sld_path, input_paths):
             logging.info(f"[SKIP] {periods_sld_path} is up-to-date")
-            period_df = pl.read_parquet(periods_sld_path)
+            # Only load if needed for next step
+            if not is_up_to_date(f"data/periods_with_network_ratio_{run_id}.parquet", {"periods_sld_hash": periods_sld_path}):
+                period_df = pl.read_parquet(periods_sld_path)
+            else:
+                period_df = None
             step_info["status"] = "reused"
             step_info["reused_from"] = reused_from
             step_info["output_path"] = periods_sld_path
@@ -304,6 +304,12 @@ def main():
     # Update LAST_RUN_ID after step (extra robustness)
     with open(os.path.join("pipeline_stats", "LAST_RUN_ID"), "w") as f:
         f.write(run_id)
+
+    # --- Record indicator flags and overlaps for analysis ---
+    if period_df is not None:
+        indicator_cols = ["is_traj_outlier", "is_sld_outlier", "is_network_outlier"]
+        stats.record_indicator_flags(period_df, indicator_cols)
+        stats.save()
 
     # --- Step 4: Network ratio ---
     resume_batches = args.resume or args.reuse_latest
