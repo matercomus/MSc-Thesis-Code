@@ -17,7 +17,7 @@ def get_file_size(path):
         return 0
 
 def main():
-    parser = argparse.ArgumentParser(description="Merge multiple Parquet files into one using Polars.")
+    parser = argparse.ArgumentParser(description="Merge multiple Parquet files into one using Polars (streaming mode).")
     parser.add_argument(
         "--input-dir", "-i", default="data/parquet", help="Directory containing Parquet files (default: data/parquet)"
     )
@@ -30,7 +30,7 @@ def main():
     args = parser.parse_args()
 
     try:
-        log("==== Starting Parquet merge ====", args.verbose)
+        log("==== Starting Parquet merge (streaming) ====", args.verbose)
         start = time.time()
         files = sorted(glob.glob(os.path.join(args.input_dir, "*.parquet")))
         if not files:
@@ -47,28 +47,29 @@ def main():
                 print("Aborting to prevent accidental overwrite.")
                 sys.exit(1)
 
-        # Merge files one by one for memory safety
-        log(f"Reading and merging files one by one...", args.verbose)
-        df = None
+        # Streaming merge using scan_parquet and sink_parquet
+        log(f"Preparing lazy scan of all files...", args.verbose)
+        lazy_frames = []
         for idx, f in enumerate(files):
-            size_mb = get_file_size(f)
-            try:
-                part = pl.read_parquet(f)
-                row_count = part.height
-                log(f"[{idx+1}/{len(files)}] Merging {os.path.basename(f)} | {size_mb:.2f} MB | {row_count} rows", args.verbose)
-                if df is None:
-                    df = part
-                else:
-                    df = df.vstack(part)
-            except Exception as e:
-                log(f"ERROR reading {f}: {e}", True)
-                raise
-        log("Writing merged Parquet file...", args.verbose)
-        df.write_parquet(args.output)
+            log(f"[{idx+1}/{len(files)}] Including {os.path.basename(f)} in merge", args.verbose)
+            lazy_frames.append(pl.scan_parquet(f))
+        merged = pl.concat(lazy_frames)
+        log("Writing merged Parquet file (streaming, low memory)...", args.verbose)
+        merged.sink_parquet(args.output)
         log(f"Merged file written to {args.output}", args.verbose)
-        log(f"Total rows: {df.height}", args.verbose)
         duration = time.time() - start
         log(f"==== Merge complete in {duration:.1f} seconds ====", args.verbose)
+
+        # Final file stats
+        log("Reading merged file for stats...", args.verbose)
+        df_final = pl.read_parquet(args.output)
+        file_size_mb = get_file_size(args.output)
+        log(f"Final merged file stats:", True)
+        log(f"  Path: {args.output}", True)
+        log(f"  Size: {file_size_mb:.2f} MB", True)
+        log(f"  Rows: {df_final.height}", True)
+        log(f"  Columns: {df_final.width}", True)
+        log(f"  Column names: {df_final.columns}", args.verbose)
     except Exception as e:
         log(f"FATAL ERROR: {e}", True)
         sys.exit(1)
