@@ -19,29 +19,24 @@ from tqdm import tqdm
 # Column Definitions
 # --------------------------
 
-# Full column headers in order
-FULL_COLUMN_HEADERS = [
-    "company_id",  # First column: taxi company identifier (unimportant)
-    "taxi_id",  # Second column: unique taxi identifier (unimportant)
-    "license_plate",  # Third column: license plate number
-    "timestamp",  # Fourth column: time of trajectory point collection
-    "longitude",  # Fifth column: longitude of trajectory point
-    "latitude",  # Sixth column: latitude of trajectory point
-    "instant_speed",  # Seventh column: instantaneous speed (inaccurate, needs calculation)
-    "occupancy_status",  # Eighth column: occupancy status (0=empty, 1=occupied, 2=reserved, 3=out of service)
-    "unknown_9",  # Ninth column: no information (unimportant)
-    "unknown_10",  # Tenth column: no information (unimportant)
-    "unknown_11",  # Eleventh column: no information (unimportant)
+REGION_CSV_HEADERS = [
+    "company",        # Taxi Company
+    "vehicle_num",    # VehicleNum
+    "timestamp",      # Time
+    "longitude",      # Lng
+    "latitude",       # Lat
+    "instant_speed",  # Speed
+    "occupancy_status" # OpenStatus
 ]
 
 # Columns to focus on
 TARGET_COLUMNS = [
-    "license_plate",  # 车牌号 (3rd column)
-    "timestamp",  # 轨迹点采集时间 (4th column)
-    "longitude",  # 经度 (5th column)
-    "latitude",  # 纬度 (6th column)
-    "instant_speed",  # 瞬时速度 (7th column, but needs recalculation)
-    "occupancy_status",  # 载客状态 (8th column, 0=空车, 1=载客, 2=预约, 3=暂停服务)
+    "vehicle_num",      # VehicleNum (2nd column)
+    "timestamp",        # Time (3rd column)
+    "longitude",        # Lng (4th column)
+    "latitude",         # Lat (5th column)
+    "instant_speed",    # Speed (6th column)
+    "occupancy_status", # OpenStatus (7th column)
 ]
 
 # --------------------------
@@ -77,7 +72,7 @@ def clean_up_on_failure(out_path: Path) -> None:
 def get_column_definitions() -> Dict[str, Any]:
     """Define column names and their types with precise mapping"""
     return {
-        "license_plate": pl.Categorical,
+        "vehicle_num": pl.Categorical,
         "timestamp": pl.Datetime,
         "longitude": pl.Float64,
         "latitude": pl.Float64,
@@ -93,35 +88,26 @@ def perform_conversion(
     columns_to_keep: Optional[List[str]] = None,
 ) -> pl.LazyFrame:
     """Core conversion logic using Polars"""
-    # If no specific columns provided, use default target columns
     columns_to_keep = columns_to_keep or TARGET_COLUMNS
-
-    # Validate requested columns
     invalid_columns = set(columns_to_keep) - set(TARGET_COLUMNS)
     if invalid_columns:
         raise ValueError(f"Invalid columns requested: {invalid_columns}")
-
-    # Prepare column definitions for selected columns
     column_defs = get_column_definitions()
     selected_column_defs = {col: column_defs[col] for col in columns_to_keep}
-
-    # Perform CSV scanning
     scan = pl.scan_csv(
         input_path,
         has_header=False,
-        new_columns=FULL_COLUMN_HEADERS,
+        new_columns=REGION_CSV_HEADERS,
         infer_schema_length=10000,
         schema_overrides={
-            FULL_COLUMN_HEADERS[i]: selected_column_defs.get(col, pl.Utf8)
-            for i, col in enumerate(FULL_COLUMN_HEADERS)
+            REGION_CSV_HEADERS[i]: selected_column_defs.get(col, pl.Utf8)
+            for i, col in enumerate(REGION_CSV_HEADERS)
         },
         null_values=["N", "n", ""],
         ignore_errors=True,
-        # columns=column_indices, # Remove this line
     ).select(
         columns_to_keep
-    )  # Select the desired columns after scanning
-
+    )
     return scan
 
 
