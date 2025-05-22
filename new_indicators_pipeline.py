@@ -7,7 +7,7 @@ A pure Python script for the full Beijing taxi trajectory cleaning and analysis 
 - Uses logging (see utils.py) for status updates.
 - Outputs: cleaned_points_in_beijing.parquet, cleaned_with_period_id_in_beijing.parquet, periods_with_sld_ratio.parquet
 
-Requirements: polars, pandas, tqdm, scikit-learn
+Requirements: polars, pandas, tqdm, scikit-learn, scipy
 """
 
 import logging
