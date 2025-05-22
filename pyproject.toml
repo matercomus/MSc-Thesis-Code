@@ -24,3 +24,7 @@ pytest = "pytest:main"
 [tool.pytest.ini_options]
 testpaths = ["."]
 python_files = ["tests.py"]
+
+[tool.poetry.dependencies]
+psutil = "*"
+tqdm = "*"

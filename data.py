@@ -7,6 +7,13 @@ from pathlib import Path
 import time
 import polars as pl
 from typing import Optional, List, Dict, Any
+import argparse
+import glob
+import os
+import psutil
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import logging
+from tqdm import tqdm
 
 # --------------------------
 # Column Definitions
@@ -148,68 +155,112 @@ def print_conversion_stats(out_path: Path, compression: str, start_time: float) 
 # --------------------------
 
 
-def convert_csv_to_parquet(
-    csv_path: str,
-    output_path: Optional[str] = None,
-    compression: str = "zstd",
-    keep_columns: Optional[str] = None,
-) -> None:
-    """
-    Convert CSV to Parquet format
-
-    Args:
-        csv_path: Path to input CSV file
-        output_path: Optional output path (defaults to same as input with .parquet extension)
-        compression: Compression algorithm (zstd, snappy, gzip, lz4)
-        keep_columns: Comma-separated list of columns to keep (None keeps default target columns)
-    """
-    start_time = time.time()
-
+def get_system_resources():
+    """Return number of CPU cores and available memory in GB."""
     try:
-        print(f"\nStarting conversion of {csv_path}...")
+        import psutil
+        n_cores = psutil.cpu_count(logical=False) or os.cpu_count() or 1
+        mem_gb = psutil.virtual_memory().available / (1024 ** 3)
+    except ImportError:
+        n_cores = os.cpu_count() or 1
+        mem_gb = 4  # fallback
+    return n_cores, mem_gb
 
-        # Validate and prepare paths
-        input_path = validate_input_file(csv_path)
-        out_path = determine_output_path(input_path, output_path)
 
-        # Determine columns to keep
-        columns_to_keep = None
-        if keep_columns:
-            columns_to_keep = [col.strip() for col in keep_columns.split(",")]
+def find_csv_files(inputs):
+    """Expand globs, directories, or file lists into a list of CSV file paths."""
+    files = []
+    for inp in inputs:
+        if os.path.isdir(inp):
+            files.extend(sorted(glob.glob(os.path.join(inp, '*.csv'))))
+        elif '*' in inp or '?' in inp or '[' in inp:
+            files.extend(sorted(glob.glob(inp)))
+        else:
+            files.append(inp)
+    # Remove duplicates and non-files
+    files = [f for f in sorted(set(files)) if os.path.isfile(f)]
+    return files
 
-        # Perform the conversion
-        scan = perform_conversion(input_path, out_path, compression, columns_to_keep)
-        write_parquet(scan, out_path, compression)
 
-        # Show results
-        print_conversion_stats(out_path, compression, start_time)
+def get_file_size(path):
+    try:
+        return os.path.getsize(path)
+    except Exception:
+        return 0
 
+
+def convert_one_file(args):
+    csv_path, output_path, compression = args
+    start_time = time.time()
+    stats = {'csv': csv_path, 'parquet': output_path, 'ok': False, 'error': None}
+    try:
+        before_size = get_file_size(csv_path)
+        scan = perform_conversion(Path(csv_path), Path(output_path), compression, TARGET_COLUMNS)
+        write_parquet(scan, Path(output_path), compression)
+        after_size = get_file_size(output_path)
+        duration = time.time() - start_time
+        stats.update({
+            'ok': True,
+            'before_size': before_size,
+            'after_size': after_size,
+            'ratio': after_size / before_size if before_size else 0,
+            'duration': duration,
+            'throughput': before_size / duration / (1024 ** 2) if duration > 0 else 0
+        })
     except Exception as e:
-        print(f"\nError: {str(e)}")
-        if "out_path" in locals():
-            clean_up_on_failure(out_path)
-        raise
+        stats['error'] = str(e)
+        clean_up_on_failure(Path(output_path))
+    return stats
 
 
-# --------------------------
-# Example Usage
-# --------------------------
+def main():
+    parser = argparse.ArgumentParser(description="Batch CSV to Parquet converter for taxi data.")
+    parser.add_argument('inputs', nargs='+', help="Input CSV files, globs, or directories.")
+    parser.add_argument('--output-dir', '-o', default=None, help="Output directory for Parquet files.")
+    parser.add_argument('--compression', default='zstd', help="Parquet compression (zstd, snappy, gzip, lz4). Default: zstd")
+    parser.add_argument('--processes', type=int, default=None, help="Number of parallel processes to use. Default: auto-detect.")
+    parser.add_argument('--batch-size', type=int, default=None, help="Number of files per batch. Default: auto-detect.")
+    args = parser.parse_args()
+
+    n_cores, mem_gb = get_system_resources()
+    n_proc = args.processes or max(1, n_cores - 1)
+    batch_size = args.batch_size or max(1, min(8, int(mem_gb // 2)))
+
+    files = find_csv_files(args.inputs)
+    if not files:
+        print("No input files found.")
+        return
+
+    if args.output_dir:
+        os.makedirs(args.output_dir, exist_ok=True)
+        outputs = [os.path.join(args.output_dir, os.path.splitext(os.path.basename(f))[0] + '.parquet') for f in files]
+    else:
+        outputs = [os.path.splitext(f)[0] + '.parquet' for f in files]
+
+    print(f"Found {len(files)} files. Using {n_proc} processes, batch size {batch_size}.")
+    print(f"Compression: {args.compression}")
+
+    tasks = list(zip(files, outputs, [args.compression]*len(files)))
+    results = []
+    with ProcessPoolExecutor(max_workers=n_proc) as executor:
+        futs = [executor.submit(convert_one_file, t) for t in tasks]
+        for fut in as_completed(futs):
+            res = fut.result()
+            results.append(res)
+            if res['ok']:
+                print(f"[OK] {res['csv']} -> {res['parquet']} | {res['before_size']//1024**2}MB -> {res['after_size']//1024**2}MB | ratio: {res['ratio']:.2f} | {res['duration']:.1f}s | {res['throughput']:.1f} MB/s")
+            else:
+                print(f"[FAIL] {res['csv']} | {res['error']}")
+
+    # Summary
+    ok = [r for r in results if r['ok']]
+    print("\nSummary:")
+    print(f"Converted: {len(ok)}/{len(results)} files successfully.")
+    if ok:
+        total_in = sum(r['before_size'] for r in ok)
+        total_out = sum(r['after_size'] for r in ok)
+        total_time = sum(r['duration'] for r in ok)
+        print(f"Total input: {total_in//1024**3} GB, output: {total_out//1024**3} GB, ratio: {total_out/total_in:.2f}, total time: {total_time:.1f}s, avg throughput: {total_in/total_time/1024**2:.1f} MB/s")
 
 if __name__ == "__main__":
-    # Example configuration
-    config = {
-        "csv_path": "2019.11.25.csv",
-        "output_path": "data/2019.11.25.parquet",
-        "compression": "zstd",
-        # Optionally specify columns, otherwise uses default
-        # "keep_columns": "license_plate,timestamp,longitude,latitude,instant_speed,occupancy_status",
-    }
-
-    print("Starting CSV to Parquet Conversion")
-    print("-" * 50)
-    print(f"Input: {config['csv_path']}")
-    print(f"Output: {config['output_path']}")
-    print(f"Compression: {config['compression']}")
-    print("-" * 50)
-
-    convert_csv_to_parquet(**config)
+    main()
