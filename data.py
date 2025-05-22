@@ -14,30 +14,31 @@ import psutil
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import logging
 from tqdm import tqdm
+import sys
 
 # --------------------------
 # Column Definitions
 # --------------------------
 
-REGION_CSV_HEADERS = [
-    "company",        # Taxi Company
-    "vehicle_num",    # VehicleNum
-    "timestamp",      # Time
-    "longitude",      # Lng
-    "latitude",       # Lat
-    "instant_speed",  # Speed
-    "occupancy_status" # OpenStatus
-]
-
-# Columns to focus on
+# Columns to focus on (target names)
 TARGET_COLUMNS = [
-    "vehicle_num",      # VehicleNum (2nd column)
+    "license_plate",      # VehicleNum (2nd column)
     "timestamp",        # Time (3rd column)
     "longitude",        # Lng (4th column)
     "latitude",         # Lat (5th column)
     "instant_speed",    # Speed (6th column)
     "occupancy_status", # OpenStatus (7th column)
 ]
+
+# Mapping from CSV header to target column names
+CSV_TO_TARGET = {
+    "VehicleNum": "license_plate",
+    "Time": "timestamp",
+    "Lng": "longitude",
+    "Lat": "latitude",
+    "Speed": "instant_speed",
+    "OpenStatus": "occupancy_status"
+}
 
 # --------------------------
 # File Handling Functions
@@ -69,18 +70,6 @@ def clean_up_on_failure(out_path: Path) -> None:
 # --------------------------
 
 
-def get_column_definitions() -> Dict[str, Any]:
-    """Define column names and their types with precise mapping"""
-    return {
-        "vehicle_num": pl.Categorical,
-        "timestamp": pl.Datetime,
-        "longitude": pl.Float64,
-        "latitude": pl.Float64,
-        "instant_speed": pl.Float64,
-        "occupancy_status": pl.Int8,  # Using small integer type for status
-    }
-
-
 def perform_conversion(
     input_path: Path,
     out_path: Path,
@@ -89,25 +78,17 @@ def perform_conversion(
 ) -> pl.LazyFrame:
     """Core conversion logic using Polars"""
     columns_to_keep = columns_to_keep or TARGET_COLUMNS
-    invalid_columns = set(columns_to_keep) - set(TARGET_COLUMNS)
-    if invalid_columns:
-        raise ValueError(f"Invalid columns requested: {invalid_columns}")
-    column_defs = get_column_definitions()
-    selected_column_defs = {col: column_defs[col] for col in columns_to_keep}
+    # Only load columns from the CSV that are needed
+    csv_columns = [k for k, v in CSV_TO_TARGET.items() if v in columns_to_keep]
     scan = pl.scan_csv(
         input_path,
-        has_header=False,
-        new_columns=REGION_CSV_HEADERS,
-        infer_schema_length=10000,
-        schema_overrides={
-            REGION_CSV_HEADERS[i]: selected_column_defs.get(col, pl.Utf8)
-            for i, col in enumerate(REGION_CSV_HEADERS)
-        },
+        has_header=True,
+        columns=csv_columns,
         null_values=["N", "n", ""],
         ignore_errors=True,
-    ).select(
-        columns_to_keep
-    )
+    ).rename(CSV_TO_TARGET)
+    # Select only the target columns (in order)
+    scan = scan.select(columns_to_keep)
     return scan
 
 
@@ -177,6 +158,7 @@ def get_file_size(path):
 
 def convert_one_file(args):
     csv_path, output_path, compression = args
+    print(f"[START] {csv_path} -> {output_path}")
     start_time = time.time()
     stats = {'csv': csv_path, 'parquet': output_path, 'ok': False, 'error': None}
     try:
@@ -193,8 +175,10 @@ def convert_one_file(args):
             'duration': duration,
             'throughput': before_size / duration / (1024 ** 2) if duration > 0 else 0
         })
+        print(f"[DONE] {csv_path} -> {output_path} in {duration:.1f}s")
     except Exception as e:
         stats['error'] = str(e)
+        print(f"[FAIL] {csv_path}: {e}")
         clean_up_on_failure(Path(output_path))
     return stats
 
@@ -204,13 +188,7 @@ def main():
     parser.add_argument('inputs', nargs='+', help="Input CSV files, globs, or directories.")
     parser.add_argument('--output-dir', '-o', default=None, help="Output directory for Parquet files.")
     parser.add_argument('--compression', default='zstd', help="Parquet compression (zstd, snappy, gzip, lz4). Default: zstd")
-    parser.add_argument('--processes', type=int, default=None, help="Number of parallel processes to use. Default: auto-detect.")
-    parser.add_argument('--batch-size', type=int, default=None, help="Number of files per batch. Default: auto-detect.")
     args = parser.parse_args()
-
-    n_cores, mem_gb = get_system_resources()
-    n_proc = args.processes or max(1, n_cores - 1)
-    batch_size = args.batch_size or max(1, min(8, int(mem_gb // 2)))
 
     files = find_csv_files(args.inputs)
     if not files:
@@ -223,23 +201,20 @@ def main():
     else:
         outputs = [os.path.splitext(f)[0] + '.parquet' for f in files]
 
-    print(f"Found {len(files)} files. Using {n_proc} processes, batch size {batch_size}.")
+    print(f"Found {len(files)} files. Processing sequentially.")
     print(f"Compression: {args.compression}")
 
-    tasks = list(zip(files, outputs, [args.compression]*len(files)))
     results = []
-    with ProcessPoolExecutor(max_workers=n_proc) as executor:
-        futs = [executor.submit(convert_one_file, t) for t in tasks]
-        for fut in as_completed(futs):
-            res = fut.result()
-            results.append(res)
-            if res['ok']:
-                print(f"[OK] {res['csv']} -> {res['parquet']} | {res['before_size']//1024**2}MB -> {res['after_size']//1024**2}MB | ratio: {res['ratio']:.2f} | {res['duration']:.1f}s | {res['throughput']:.1f} MB/s")
-            else:
-                print(f"[FAIL] {res['csv']} | {res['error']}")
+    for csv_path, output_path in tqdm(zip(files, outputs), total=len(files), desc="Files"):
+        res = convert_one_file((csv_path, output_path, args.compression))
+        results.append(res)
+        if res['ok']:
+            print(f"[OK] {res['csv']} -> {res['parquet']} | {res['before_size']//1024**2}MB -> {res['after_size']//1024**2}MB | ratio: {res['ratio']:.2f} | {res['duration']:.1f}s | {res['throughput']:.1f} MB/s")
+        else:
+            print(f"[FAIL] {res['csv']} | {res['error']}")
 
     # Summary
-    ok = [r for r in results if r['ok']]
+    ok = [r for r in results if r.get('ok')]
     print("\nSummary:")
     print(f"Converted: {len(ok)}/{len(results)} files successfully.")
     if ok:
