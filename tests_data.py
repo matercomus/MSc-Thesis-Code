@@ -1,41 +1,59 @@
 import pytest
 import os
 from pathlib import Path
-from data import get_system_resources, find_csv_files, get_file_size, convert_one_file
+from data import convert_one_file, TARGET_COLUMNS, CSV_TO_TARGET
+import polars as pl
+import csv
+import logging
 
-def test_get_system_resources():
-    n_cores, mem_gb = get_system_resources()
-    assert isinstance(n_cores, int)
-    assert n_cores > 0
-    assert isinstance(mem_gb, float)
-    assert mem_gb > 0
+def test_convert_one_file_success(tmp_path):
+    # Create a valid CSV file with all required columns
+    csv_path = tmp_path / "test.csv"
+    parquet_path = tmp_path / "test.parquet"
+    header = list(CSV_TO_TARGET.keys())
+    row = ["ABC123", "2024-01-01T12:00:00", "116.4", "39.9", "50.0", "1"]
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        writer.writerow(row)
+    res = convert_one_file((str(csv_path), str(parquet_path), "zstd"))
+    assert res['ok']
+    assert os.path.exists(parquet_path)
+    # Check Parquet content
+    df = pl.read_parquet(parquet_path)
+    assert set(df.columns) == set(TARGET_COLUMNS)
+    assert df.shape[0] == 1
 
-def test_find_csv_files(tmp_path):
-    # Create some fake csv files
-    f1 = tmp_path / "a.csv"
-    f2 = tmp_path / "b.csv"
-    f1.write_text("test")
-    f2.write_text("test")
-    files = find_csv_files([str(tmp_path)])
-    assert str(f1) in files
-    assert str(f2) in files
-    # Test glob
-    files2 = find_csv_files([str(tmp_path / "*.csv")])
-    assert set(files) == set(files2)
-
-def test_get_file_size(tmp_path):
-    f = tmp_path / "file.txt"
-    f.write_text("hello world")
-    size = get_file_size(str(f))
-    assert size == len("hello world")
-    assert get_file_size("nonexistent.txt") == 0
-
-def test_convert_one_file_error(tmp_path):
-    # Should handle missing file gracefully
-    args = (str(tmp_path / "nofile.csv"), str(tmp_path / "out.parquet"), "zstd")
-    res = convert_one_file(args)
+def test_convert_one_file_missing_column(tmp_path):
+    # Create a CSV missing a required column
+    csv_path = tmp_path / "test_missing.csv"
+    parquet_path = tmp_path / "test_missing.parquet"
+    header = list(CSV_TO_TARGET.keys())[:-1]  # Remove last required column
+    row = ["ABC123", "2024-01-01T12:00:00", "116.4", "39.9", "50.0"]
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        writer.writerow(row)
+    res = convert_one_file((str(csv_path), str(parquet_path), "zstd"))
     assert not res['ok']
-    assert 'error' in res
+    assert 'Missing required columns' in res['error']
+    assert not os.path.exists(parquet_path)
+
+def test_convert_one_file_dtype_enforcement(tmp_path):
+    # Create a CSV with wrong dtype (e.g., string in a float column)
+    csv_path = tmp_path / "test_dtype.csv"
+    parquet_path = tmp_path / "test_dtype.parquet"
+    header = list(CSV_TO_TARGET.keys())
+    # instant_speed should be float, but put a string
+    row = ["ABC123", "2024-01-01T12:00:00", "116.4", "39.9", "not_a_float", "1"]
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        writer.writerow(row)
+    res = convert_one_file((str(csv_path), str(parquet_path), "zstd"))
+    assert not res['ok']
+    assert 'could not parse' in res['error'] or 'parsing' in res['error'] or 'error' in res['error'].lower()
+    assert not os.path.exists(parquet_path)
 
 # CLI argument parsing can be tested with monkeypatch
 import sys

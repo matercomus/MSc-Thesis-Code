@@ -15,6 +15,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import logging
 from tqdm import tqdm
 import sys
+import csv
 
 # --------------------------
 # Column Definitions
@@ -78,16 +79,22 @@ def perform_conversion(
 ) -> pl.LazyFrame:
     """Core conversion logic using Polars"""
     columns_to_keep = columns_to_keep or TARGET_COLUMNS
-    # Only load columns from the CSV that are needed
-    csv_columns = [k for k, v in CSV_TO_TARGET.items() if v in columns_to_keep]
+    # Define dtypes for each column
+    DTYPES = {
+        "VehicleNum": pl.Utf8,
+        "Time": pl.Utf8,  # parse as string, can convert to datetime later if needed
+        "Lng": pl.Float64,
+        "Lat": pl.Float64,
+        "Speed": pl.Float64,
+        "OpenStatus": pl.Int64,
+    }
     scan = pl.scan_csv(
         input_path,
         has_header=True,
-        columns=csv_columns,
         null_values=["N", "n", ""],
-        ignore_errors=True,
+        ignore_errors=False,
+        schema_overrides=DTYPES,
     ).rename(CSV_TO_TARGET)
-    # Select only the target columns (in order)
     scan = scan.select(columns_to_keep)
     return scan
 
@@ -158,10 +165,21 @@ def get_file_size(path):
 
 def convert_one_file(args):
     csv_path, output_path, compression = args
-    print(f"[START] {csv_path} -> {output_path}")
+    logging.info(f"[START] {csv_path} -> {output_path}")
     start_time = time.time()
     stats = {'csv': csv_path, 'parquet': output_path, 'ok': False, 'error': None}
     try:
+        # Check CSV header for required columns
+        with open(csv_path, newline='', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            header = next(reader)
+        required = set(CSV_TO_TARGET.keys())
+        missing = required - set(header)
+        if missing:
+            msg = f"Missing required columns in {csv_path}: {missing}"
+            logging.error(msg)
+            stats['error'] = msg
+            return stats
         before_size = get_file_size(csv_path)
         scan = perform_conversion(Path(csv_path), Path(output_path), compression, TARGET_COLUMNS)
         write_parquet(scan, Path(output_path), compression)
@@ -175,11 +193,13 @@ def convert_one_file(args):
             'duration': duration,
             'throughput': before_size / duration / (1024 ** 2) if duration > 0 else 0
         })
-        print(f"[DONE] {csv_path} -> {output_path} in {duration:.1f}s")
+        logging.info(f"[DONE] {csv_path} -> {output_path} in {duration:.1f}s")
     except Exception as e:
         stats['error'] = str(e)
-        print(f"[FAIL] {csv_path}: {e}")
-        clean_up_on_failure(Path(output_path))
+        logging.error(f"[FAIL] {csv_path}: {e}")
+        # Remove partial output file if it exists
+        if os.path.exists(output_path):
+            os.remove(output_path)
     return stats
 
 
