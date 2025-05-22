@@ -59,17 +59,6 @@ def main():
         log(f"Merged file written to {args.output}", args.verbose)
         duration = time.time() - start
         log(f"==== Merge complete in {duration:.1f} seconds ====", args.verbose)
-
-        # Final file stats
-        log("Reading merged file for stats...", args.verbose)
-        df_final = pl.read_parquet(args.output)
-        file_size_mb = get_file_size(args.output)
-        log(f"Final merged file stats:", True)
-        log(f"  Path: {args.output}", True)
-        log(f"  Size: {file_size_mb:.2f} MB", True)
-        log(f"  Rows: {df_final.height}", True)
-        log(f"  Columns: {df_final.width}", True)
-        log(f"  Column names: {df_final.columns}", args.verbose)
     except Exception as e:
         log(f"FATAL ERROR: {e}", True)
         sys.exit(1)
