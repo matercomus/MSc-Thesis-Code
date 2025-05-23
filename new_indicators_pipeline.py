@@ -28,6 +28,11 @@ from utils import (
 import argparse
 import os
 import sys
+from rdp_quick import rdp_single_initial_window
+import json
+
+# === RDP CONFIGURATION ===
+RDP_EPSILON = 0.0001  # Douglas–Peucker simplification tolerance (degrees)
 
 def save_parquet(df: pl.DataFrame, path: str, label: str = None):
     df.write_parquet(path)
@@ -49,6 +54,7 @@ def attach_period_id(cleaned_df: pl.DataFrame, period_df: pl.DataFrame) -> pl.Da
 def main():
     configure_logging()
     logging.info("Starting indicators pipeline (pure Python version)")
+    logging.info(f"RDP_EPSILON for Douglas–Peucker simplification: {RDP_EPSILON}")
 
     parser = argparse.ArgumentParser(description="Indicators pipeline for Beijing taxi data.")
     parser.add_argument(
@@ -58,11 +64,17 @@ def main():
     parser.add_argument(
         "--output-dir", "-o", default="data", help="Output directory for results (default: data)"
     )
+    parser.add_argument(
+        "--rdp-epsilon", type=float, default=RDP_EPSILON, help="Douglas–Peucker epsilon (default: %(default)s)"
+    )
     args = parser.parse_args()
 
     input_arg = args.input
     output_dir = args.output_dir
+    rdp_epsilon = args.rdp_epsilon
     os.makedirs(output_dir, exist_ok=True)
+
+    logging.info(f"Using RDP_EPSILON: {rdp_epsilon}")
 
     # Determine input files
     if os.path.isdir(input_arg):
@@ -128,6 +140,63 @@ def main():
         MIN_PERIOD_POINTS = 3
         period_df = period_df.filter(pl.col("count_rows") >= MIN_PERIOD_POINTS)
         logging.info(f"Period summary shape: {period_df.shape}")
+
+        # --- Douglas–Peucker simplification for each period ---
+        logging.info(f"Simplifying trajectories for each period using Douglas–Peucker (rdp-quick) with epsilon={rdp_epsilon}...")
+        simplified_records = []
+        rdp_metadata = {
+            "file": file_path,
+            "rdp_epsilon": rdp_epsilon,
+            "periods": [],
+            "total_points_before": 0,
+            "total_points_after": 0,
+        }
+        # Merge period_id and occupancy_status into cleaned_df for grouping
+        cleaned_with_pid = cleaned_df.join(
+            period_df.select(["license_plate", "period_id", "occupancy_status"]),
+            on=["license_plate", "occupancy_status"], how="inner"
+        )
+        # Group by license_plate, period_id, occupancy_status
+        for (lp, pid, occ), group in cleaned_with_pid.group_by(["license_plate", "period_id", "occupancy_status"]):
+            group_df = group.sort("timestamp")
+            coords = group_df.select(["longitude", "latitude"]).to_numpy()
+            before = len(coords)
+            if before < 3:
+                simplified = coords
+            else:
+                simplified = rdp_single_initial_window(coords, rdp_epsilon)
+            after = len(simplified)
+            rdp_metadata["periods"].append({
+                "license_plate": lp,
+                "period_id": pid,
+                "occupancy_status": occ,
+                "points_before": before,
+                "points_after": after,
+            })
+            rdp_metadata["total_points_before"] += before
+            rdp_metadata["total_points_after"] += after
+            logging.info(f"RDP period {lp}-{pid}-{occ}: {before} -> {after} points")
+            # Reconstruct DataFrame for simplified points
+            mask = set(map(tuple, simplified))
+            simplified_rows = [row for row in group_df.rows() if (row[2], row[3]) in mask]  # assumes col order
+            for row in simplified_rows:
+                simplified_records.append(row + (pid, occ))
+        # Build DataFrame for all simplified points
+        if simplified_records:
+            # Get columns from cleaned_df and add period_id, occupancy_status
+            cols = cleaned_df.columns + ["period_id", "occupancy_status"]
+            simplified_df = pl.DataFrame(simplified_records, schema=cols)
+            simplified_path = os.path.join(output_dir, f"{file_base}_rdp{rdp_epsilon:.0e}_simplified_points.parquet")
+            save_parquet(simplified_df, simplified_path, label="Simplified points (Douglas–Peucker)")
+            # Save metadata
+            meta_path = os.path.join(output_dir, f"{file_base}_rdp{rdp_epsilon:.0e}_simplified_metadata.json")
+            with open(meta_path, "w") as f:
+                json.dump(rdp_metadata, f, indent=2)
+            logging.info(f"RDP simplification: total points {rdp_metadata['total_points_before']} -> {rdp_metadata['total_points_after']}")
+            logging.info(f"RDP metadata written to {meta_path}")
+        else:
+            logging.warning("No simplified points generated.")
+        # --- End Douglas–Peucker simplification ---
 
         # Attach period_id (and period time bounds) to cleaned points
         logging.info("Attaching period_id to cleaned points...")
