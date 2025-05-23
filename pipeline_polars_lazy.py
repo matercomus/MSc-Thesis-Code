@@ -1,15 +1,8 @@
 import polars as pl
 import logging
 import argparse
-import sys
+from utils.pipline_helpers import configure_logging
 
-
-def configure_logging():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        stream=sys.stdout,
-    )
 
 def main():
     configure_logging()
@@ -24,7 +17,7 @@ def main():
 
     logging.info(f"Loading parquet file lazily: {input_path}")
     lazy_df = pl.scan_parquet(input_path)
-    logging.info(f"Schema: {lazy_df.schema}")
+    logging.info(f"Schema: {lazy_df.collect_schema()}")
 
 if __name__ == "__main__":
     main() 
