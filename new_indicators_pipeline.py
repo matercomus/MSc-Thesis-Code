@@ -58,11 +58,11 @@ def main():
 
     parser = argparse.ArgumentParser(description="Indicators pipeline for Beijing taxi data.")
     parser.add_argument(
-        "--input", "-i", default="data/filtered_points_in_beijing.parquet",
+        "--input", "-i", default="data/parquet",
         help="Input Parquet file, comma-separated list of files, or directory (default: data/filtered_points_in_beijing.parquet)"
     )
     parser.add_argument(
-        "--output-dir", "-o", default="data", help="Output directory for results (default: data)"
+        "--output-dir", "-o", default="pipline_out", help="Output directory for results (default: data)"
     )
     parser.add_argument(
         "--rdp-epsilon", type=float, default=RDP_EPSILON, help="Douglas–Peucker epsilon (default: %(default)s)"
@@ -94,6 +94,15 @@ def main():
         file_base = os.path.splitext(os.path.basename(file_path))[0]
         logging.info(f"Processing file: {file_path}")
         lazy_df = pl.scan_parquet(file_path)
+
+        # --- Patch: Ensure correct dtype for timestamp column only ---
+        schema_names = lazy_df.collect_schema().names()
+        if "timestamp" in schema_names:
+            logging.info("Casting 'timestamp' from String to Datetime using format '%Y-%m-%d %H:%M:%S'")
+            lazy_df = lazy_df.with_columns(
+                pl.col("timestamp").str.strptime(pl.Datetime, format="%Y-%m-%d %H:%M:%S", strict=False).alias("timestamp")
+            )
+        # --- End patch ---
 
         # Compute robust thresholds using IQR on occupied trips only
         logging.info("Computing IQR-based thresholds for time gaps and speeds...")
