@@ -1,0 +1,6 @@
+license_plate: nulls=8080, unique=63744
+timestamp: nulls=0, unique=250715
+longitude: nulls=0, unique=5585130
+latitude: nulls=0, unique=4669444
+instant_speed: nulls=0, unique=1604
+occupancy_status: nulls=0, unique=4

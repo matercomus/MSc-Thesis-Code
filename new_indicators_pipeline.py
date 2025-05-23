@@ -13,7 +13,6 @@ Requirements: polars, pandas, tqdm, scikit-learn, scipy
 import logging
 from tqdm import tqdm
 import polars as pl
-import pandas as pd
 from utils import (
     configure_logging,
     add_time_distance_calcs,

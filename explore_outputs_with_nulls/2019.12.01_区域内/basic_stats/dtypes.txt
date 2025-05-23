@@ -1,0 +1,6 @@
+license_plate: String
+timestamp: String
+longitude: Float64
+latitude: Float64
+instant_speed: Float64
+occupancy_status: Int64

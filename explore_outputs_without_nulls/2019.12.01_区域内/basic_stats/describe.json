@@ -1,0 +1,52 @@
+{
+  "license_plate": {
+    "dtype": "String",
+    "nulls": 0,
+    "unique": 63565
+  },
+  "timestamp": {
+    "dtype": "String",
+    "nulls": 0,
+    "unique": 282969
+  },
+  "longitude": {
+    "dtype": "Float64",
+    "mean": 116.4320356689977,
+    "std": 0.2581682763282413,
+    "min": 115.465137,
+    "max": 117.49781,
+    "median": 116.40749,
+    "nulls": 0,
+    "unique": 5645539
+  },
+  "latitude": {
+    "dtype": "Float64",
+    "mean": 39.947858499844884,
+    "std": 0.18664668334637297,
+    "min": 39.44676,
+    "max": 41.04875,
+    "median": 39.93123,
+    "nulls": 0,
+    "unique": 4697383
+  },
+  "instant_speed": {
+    "dtype": "Float64",
+    "mean": 164.38030619731532,
+    "std": 1794.3257922680325,
+    "min": 0.0,
+    "max": 65281.0,
+    "median": 0.0,
+    "nulls": 0,
+    "unique": 1656
+  },
+  "occupancy_status": {
+    "dtype": "Int64",
+    "mean": 0.3975940087622071,
+    "std": 0.7861154752971083,
+    "min": 0,
+    "max": 3,
+    "median": 0.0,
+    "nulls": 0,
+    "unique": 4
+  }
+}
