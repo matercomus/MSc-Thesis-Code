@@ -35,10 +35,12 @@ def main():
         in_path = os.path.join(args.input_dir, fname)
         out_path = os.path.join(cleaned_dir, fname)
         lazy_df = pl.scan_parquet(in_path)
-        before = lazy_df.select(pl.count()).collect().item()
+        before = lazy_df.select(pl.len()).collect().item()
         lazy_df = lazy_df.drop_nulls()
-        lazy_df = lazy_df.filter(~pl.any_horizontal([pl.col(col).is_nan() for col in lazy_df.columns]))
-        after = lazy_df.select(pl.count()).collect().item()
+        float_cols = [name for name, dtype in lazy_df.collect_schema().items() if dtype in (pl.Float32, pl.Float64)]
+        if float_cols:
+            lazy_df = lazy_df.filter(~pl.any_horizontal([pl.col(col).is_nan() for col in float_cols]))
+        after = lazy_df.select(pl.len()).collect().item()
         dropped = before - after
         cleaning_stats["files"][fname] = {"before": before, "after": after, "dropped": dropped}
         cleaning_stats["total_before"] += before
@@ -53,7 +55,7 @@ def main():
     cleaned_files = [f for f in os.listdir(cleaned_dir) if f.endswith('.parquet')]
     for fname in cleaned_files:
         lazy_df = pl.scan_parquet(os.path.join(cleaned_dir, fname))
-        rows = lazy_df.select(pl.count()).collect().item()
+        rows = lazy_df.select(pl.len()).collect().item()
         segmented_stats["files"][fname] = {"rows": rows}
         segmented_stats["total_rows"] += rows
     metadata_logger.add_stat("segmentation", segmented_stats)

@@ -13,10 +13,12 @@ def clean_parquet_files(input_dir, cleaned_dir, license_plate_col, occupancy_col
         in_path = os.path.join(input_dir, fname)
         out_path = os.path.join(cleaned_dir, fname)
         lazy_df = pl.scan_parquet(in_path)
-        before = lazy_df.select(pl.count()).collect().item()
+        before = lazy_df.select(pl.len()).collect().item()
         lazy_df = lazy_df.drop_nulls()
-        lazy_df = lazy_df.filter(~pl.any_horizontal([pl.col(col).is_nan() for col in lazy_df.columns]))
-        after = lazy_df.select(pl.count()).collect().item()
+        float_cols = [name for name, dtype in lazy_df.collect_schema().items() if dtype in (pl.Float32, pl.Float64)]
+        if float_cols:
+            lazy_df = lazy_df.filter(~pl.any_horizontal([pl.col(col).is_nan() for col in float_cols]))
+        after = lazy_df.select(pl.len()).collect().item()
         dropped = before - after
         if dropped > 0:
             logging.warning(f"[CLEAN] Dropped {dropped} rows with null or NaN values in {fname}.")
