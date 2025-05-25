@@ -1,6 +1,7 @@
 import argparse
 import logging
 from utils.period_segmentation import segment_periods_across_parquet
+from utils.pipeline_helpers import configure_logging
 
 
 def main():
@@ -15,7 +16,7 @@ def main():
     parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING)
+    configure_logging()
     logging.info(f"Running period segmentation: {args}")
 
     segment_periods_across_parquet(

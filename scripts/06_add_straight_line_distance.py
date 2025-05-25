@@ -1,5 +1,6 @@
 import argparse
 import logging
+from utils.pipeline_helpers import configure_logging
 
 def main():
     parser = argparse.ArgumentParser(description="Step 06: Add straight-line distance from start to end point for each period.")
@@ -8,7 +9,7 @@ def main():
     parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING)
+    configure_logging()
     logging.info(f"[TODO] Add straight-line distance: {args}")
     # TODO: Implement logic to add straight-line distance
 
