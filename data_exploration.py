@@ -21,12 +21,32 @@ from utils.stats_and_plotting import (
     basic_stats, period_length_stats, period_length_histogram, periods_per_license_plate, period_speed_stats, period_speed_histogram,
     period_start_end_time_distribution, period_duration_vs_speed_scatter, occupancy_status_transitions, periods_per_day_hour,
     period_length_by_license_plate, period_start_end_map, period_start_time_vs_duration_heatmap, idle_vs_occupied_distribution,
-    cumulative_distance_per_period, speed_outlier_boxplot
+    speed_outlier_boxplot
 )
 import yaml
+import inspect
+from dataclasses import dataclass
+from typing import Optional, Dict, Any
 
 OUTPUT_DIR = "explore_outputs"
 REMOVE_NULL_ROWS = False  # Set to True to drop all rows containing nulls before analysis
+
+@dataclass
+class AnalysisContext:
+    """Context object containing all data needed for analysis functions"""
+    ldf: pl.LazyFrame
+    output_dir: str
+    metadata_logger: StepMetadataLogger
+    columns: Dict[str, str]
+    results: Dict[str, Any]
+    
+    def get_df(self) -> pl.DataFrame:
+        """Get eager DataFrame when needed"""
+        return self.ldf.collect()
+    
+    def get_column(self, key: str, default: str = None) -> str:
+        """Get column name from config"""
+        return self.columns.get(key, default or key)
 
 # Registry of all available analysis functions
 PLOT_REGISTRY = {
@@ -44,8 +64,19 @@ PLOT_REGISTRY = {
     "period_start_end_map": period_start_end_map,
     "period_start_time_vs_duration_heatmap": period_start_time_vs_duration_heatmap,
     "idle_vs_occupied_distribution": idle_vs_occupied_distribution,
-    "cumulative_distance_per_period": cumulative_distance_per_period,
     "speed_outlier_boxplot": speed_outlier_boxplot,
+}
+
+# Which functions require a DataFrame (not LazyFrame)
+FUNC_NEEDS_DF = {
+    "period_length_histogram": True,
+    "period_speed_histogram": True,
+}
+
+# Which functions require the output of a previous function
+FUNC_DEPENDENCIES = {
+    "period_length_histogram": "period_length_stats",
+    "period_speed_histogram": "period_speed_stats",
 }
 
 configure_logging()
@@ -232,7 +263,7 @@ def load_config(config_path):
 
 def main():
     global OUTPUT_DIR
-    parser = argparse.ArgumentParser(description="Data Exploration Script (YAML-configurable)")
+    parser = argparse.ArgumentParser(description="Data Exploration Script (YAML-configurable, file-by-file)")
     parser.add_argument("--config", type=str, default="period_analysis.yaml", help="YAML config file for period analysis")
     parser.add_argument("--output-dir", "-o", default=OUTPUT_DIR, help="Output directory")
     parser.add_argument("--period-dir", type=str, default="data/steps_data/01_segment_periods/", help="Directory with period-segmented parquet files")
@@ -242,51 +273,81 @@ def main():
     ensure_dir(OUTPUT_DIR)
 
     # Load config
-    config = load_config(args.config)
+    logging.info(f"Loading config from {args.config}")
+    with open(args.config, 'r') as f:
+        config = yaml.safe_load(f)
     columns = config.get('columns', {})
     plots = config.get('plots', [])
+    logging.info(f"Loaded config: columns={columns}, plots={[p['name'] if isinstance(p, dict) else p for p in plots]}")
 
-    # Aggregate all period-segmented files
+    # List all period-segmented files
     period_files = [os.path.join(args.period_dir, f) for f in os.listdir(args.period_dir) if f.endswith('.parquet')]
     if not period_files:
         logging.error(f"No parquet files found in {args.period_dir}")
         sys.exit(1)
-    lazy_frames = [pl.scan_parquet(f) for f in period_files]
-    ldf = pl.concat(lazy_frames)
-    period_outdir = os.path.join(OUTPUT_DIR, "periods")
-    ensure_dir(period_outdir)
-    metadata_logger = StepMetadataLogger(output_dir=period_outdir)
+    logging.info(f"Found {len(period_files)} parquet files in {args.period_dir}")
 
-    # Run all plots/stats as specified in config
-    for plot in plots:
-        if isinstance(plot, dict):
-            name = plot['name']
-            params = plot.get('params', {})
-        else:
-            name = plot
-            params = {}
-        func = PLOT_REGISTRY.get(name)
-        if not func:
-            logging.warning(f"Unknown plot/stat function: {name}")
-            continue
-        # Build argument list from config columns and any plot-specific params
-        func_args = dict(columns)
-        func_args.update(params)
-        # Always pass ldf, output_dir, metadata_logger
+    for file_idx, period_file in enumerate(period_files):
+        file_base = os.path.splitext(os.path.basename(period_file))[0]
+        file_outdir = os.path.join(OUTPUT_DIR, file_base)
+        ensure_dir(file_outdir)
+        logging.info(f"[{file_idx+1}/{len(period_files)}] Processing file: {period_file} -> {file_outdir}")
         try:
-            func(ldf, period_outdir, metadata_logger=metadata_logger, **func_args)
-            logging.info(f"Ran {name}")
-        except TypeError:
-            # For legacy functions with different signatures
-            try:
-                func(ldf, period_outdir, metadata_logger)
-                logging.info(f"Ran {name} (legacy signature)")
-            except Exception as e:
-                logging.error(f"Failed to run {name}: {e}")
+            ldf = pl.scan_parquet(period_file)
+            if REMOVE_NULL_ROWS:
+                logging.info(f"Dropping null rows for {period_file}")
+                ldf = ldf.drop_nulls()
+            
+            metadata_logger = StepMetadataLogger(output_dir=file_outdir)
+            results = {}
+            
+            # Create analysis context
+            context = AnalysisContext(
+                ldf=ldf,
+                output_dir=file_outdir,
+                metadata_logger=metadata_logger,
+                columns=columns,
+                results=results
+            )
+            
+            for plot_idx, plot in enumerate(plots):
+                if isinstance(plot, dict):
+                    name = plot['name']
+                    params = plot.get('params', {})
+                else:
+                    name = plot
+                    params = {}
+                func = PLOT_REGISTRY.get(name)
+                if not func:
+                    logging.warning(f"Unknown plot/stat function: {name}")
+                    continue
+                
+                # Handle dependencies
+                if name in FUNC_DEPENDENCIES:
+                    dep_name = FUNC_DEPENDENCIES[name]
+                    dep_result = results.get(dep_name)
+                    if dep_result is not None:
+                        if name == "period_length_histogram":
+                            context.results["period_lengths_df"] = dep_result
+                        elif name == "period_speed_histogram":
+                            context.results["period_speeds_df"] = dep_result
+                
+                logging.info(f"Running [{plot_idx+1}/{len(plots)}] {name} on {period_file}")
+                try:
+                    # Simply pass the context - let each function extract what it needs
+                    result = func(context)
+                    results[name] = result
+                    context.results[name] = result
+                    logging.info(f"Completed {name} for {period_file}")
+                except Exception as e:
+                    logging.error(f"Failed to run {name} on {period_file}: {e}")
+            
+            metadata_logger.save()
+            logging.info(f"Finished all plots/stats for {period_file}. Metadata saved to {os.path.join(file_outdir, 'step_metadata.json')}")
         except Exception as e:
-            logging.error(f"Failed to run {name}: {e}")
-    metadata_logger.save()
-    logging.info(f"Period analysis complete. Metadata saved to {os.path.join(period_outdir, 'step_metadata.json')}")
+            logging.error(f"Failed to process file {period_file}: {e}")
+
+    logging.info(f"All files processed. Outputs in {OUTPUT_DIR}")
 
 if __name__ == "__main__":
     main()

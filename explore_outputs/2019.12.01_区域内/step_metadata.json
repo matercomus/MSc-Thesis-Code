@@ -1,0 +1,30 @@
+{
+  "period_length_stats": {
+    "mean": 141.2704675287,
+    "median": 19.0,
+    "min": 1,
+    "max": 29798,
+    "std": 487.00702981911326,
+    "count": 1041027
+  },
+  "period_length_stats_json": "explore_outputs/2019.12.01_\u533a\u57df\u5185/period_length_stats.json",
+  "period_length_histogram_plot": "explore_outputs/2019.12.01_\u533a\u57df\u5185/period_length_hist.png",
+  "period_length_histogram_html": "explore_outputs/2019.12.01_\u533a\u57df\u5185/period_length_hist.html",
+  "periods_per_license_plate_stats": {
+    "mean": 16.377361755683157,
+    "median": 1.0,
+    "min": 1,
+    "max": 4045,
+    "std": 81.52456245003037,
+    "count": 63565
+  },
+  "periods_per_license_plate_stats_json": "explore_outputs/2019.12.01_\u533a\u57df\u5185/periods_per_license_plate_stats.json",
+  "periods_per_license_plate_histogram_plot": "explore_outputs/2019.12.01_\u533a\u57df\u5185/periods_per_license_plate_hist.png",
+  "periods_per_license_plate_histogram_html": "explore_outputs/2019.12.01_\u533a\u57df\u5185/periods_per_license_plate_hist.html",
+  "occupancy_status_transitions_plot": "explore_outputs/2019.12.01_\u533a\u57df\u5185/occupancy_status_transitions.png",
+  "occupancy_status_transitions_html": "explore_outputs/2019.12.01_\u533a\u57df\u5185/occupancy_status_transitions.html",
+  "period_length_by_license_plate_plot": "explore_outputs/2019.12.01_\u533a\u57df\u5185/period_length_by_license_plate.png",
+  "period_length_by_license_plate_html": "explore_outputs/2019.12.01_\u533a\u57df\u5185/period_length_by_license_plate.html",
+  "idle_vs_occupied_pie_plot": "explore_outputs/2019.12.01_\u533a\u57df\u5185/idle_vs_occupied_pie.png",
+  "idle_vs_occupied_pie_html": "explore_outputs/2019.12.01_\u533a\u57df\u5185/idle_vs_occupied_pie.html"
+}
