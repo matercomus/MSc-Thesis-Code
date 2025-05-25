@@ -12,17 +12,17 @@ def clean_parquet_files(input_dir, cleaned_dir, license_plate_col, occupancy_col
     for fname in parquet_files:
         in_path = os.path.join(input_dir, fname)
         out_path = os.path.join(cleaned_dir, fname)
-        df = pl.read_parquet(in_path)
-        before = df.height
-        df = df.drop_nulls()
-        df = df.filter(~pl.any_horizontal([pl.col(col).is_nan() for col in df.columns]))
-        after = df.height
+        lazy_df = pl.scan_parquet(in_path)
+        before = lazy_df.select(pl.count()).collect().item()
+        lazy_df = lazy_df.drop_nulls()
+        lazy_df = lazy_df.filter(~pl.any_horizontal([pl.col(col).is_nan() for col in lazy_df.columns]))
+        after = lazy_df.select(pl.count()).collect().item()
         dropped = before - after
         if dropped > 0:
             logging.warning(f"[CLEAN] Dropped {dropped} rows with null or NaN values in {fname}.")
         else:
             logging.info(f"[CLEAN] No null or NaN rows dropped in {fname}.")
-        df.write_parquet(out_path)
+        lazy_df.sink_parquet(out_path)
 
 
 def segment_periods_across_parquet(

@@ -27,33 +27,35 @@ def main():
     # Metadata logger
     metadata_logger = StepMetadataLogger(output_dir=args.output_dir)
 
-    # Clean input files first, collect stats
+    # Clean input files first, collect stats (lazily)
     cleaned_dir = os.path.join(args.output_dir, 'cleaned')
     parquet_files = [f for f in os.listdir(args.input_dir) if f.endswith('.parquet')]
     cleaning_stats = {"files": {}, "total_before": 0, "total_after": 0, "total_dropped": 0}
     for fname in parquet_files:
         in_path = os.path.join(args.input_dir, fname)
-        df = pl.read_parquet(in_path)
-        before = df.height
-        df = df.drop_nulls()
-        df = df.filter(~pl.any_horizontal([pl.col(col).is_nan() for col in df.columns]))
-        after = df.height
+        out_path = os.path.join(cleaned_dir, fname)
+        lazy_df = pl.scan_parquet(in_path)
+        before = lazy_df.select(pl.count()).collect().item()
+        lazy_df = lazy_df.drop_nulls()
+        lazy_df = lazy_df.filter(~pl.any_horizontal([pl.col(col).is_nan() for col in lazy_df.columns]))
+        after = lazy_df.select(pl.count()).collect().item()
         dropped = before - after
         cleaning_stats["files"][fname] = {"before": before, "after": after, "dropped": dropped}
         cleaning_stats["total_before"] += before
         cleaning_stats["total_after"] += after
         cleaning_stats["total_dropped"] += dropped
-        df.write_parquet(os.path.join(cleaned_dir, fname))
+        lazy_df.sink_parquet(out_path)
     metadata_logger.add_stat("cleaning", cleaning_stats)
     metadata_logger.log_stats()
 
-    # Segment periods, collect stats
+    # Segment periods, collect stats (lazily)
     segmented_stats = {"files": {}, "total_rows": 0}
     cleaned_files = [f for f in os.listdir(cleaned_dir) if f.endswith('.parquet')]
     for fname in cleaned_files:
-        df = pl.read_parquet(os.path.join(cleaned_dir, fname))
-        segmented_stats["files"][fname] = {"rows": df.height}
-        segmented_stats["total_rows"] += df.height
+        lazy_df = pl.scan_parquet(os.path.join(cleaned_dir, fname))
+        rows = lazy_df.select(pl.count()).collect().item()
+        segmented_stats["files"][fname] = {"rows": rows}
+        segmented_stats["total_rows"] += rows
     metadata_logger.add_stat("segmentation", segmented_stats)
     metadata_logger.log_stats()
 
