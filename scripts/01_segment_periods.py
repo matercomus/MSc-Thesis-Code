@@ -29,6 +29,7 @@ def main():
 
     # Clean input files first, collect stats (lazily)
     cleaned_dir = os.path.join(args.output_dir, 'cleaned')
+    os.makedirs(cleaned_dir, exist_ok=True)
     parquet_files = [f for f in os.listdir(args.input_dir) if f.endswith('.parquet')]
     cleaning_stats = {"files": {}, "total_before": 0, "total_after": 0, "total_dropped": 0}
     for fname in parquet_files:
