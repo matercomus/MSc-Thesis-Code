@@ -1,0 +1,28 @@
+columns:
+  period_col: period_id
+  license_plate_col: license_plate
+  occupancy_col: occupancy_status
+  timestamp_col: timestamp
+  distance_col: distance
+  start_lat_col: start_lat
+  start_lon_col: start_lon
+  end_lat_col: end_lat
+  end_lon_col: end_lon
+
+plots:
+  - name: basic_stats
+  - name: period_length_stats
+  - name: period_length_histogram
+  - name: periods_per_license_plate
+  - name: period_speed_stats
+  - name: period_speed_histogram
+  - name: period_start_end_time_distribution
+  - name: period_duration_vs_speed_scatter
+  - name: occupancy_status_transitions
+  - name: periods_per_day_hour
+  - name: period_length_by_license_plate
+  - name: period_start_end_map
+  - name: period_start_time_vs_duration_heatmap
+  - name: idle_vs_occupied_distribution
+  - name: cumulative_distance_per_period
+  - name: speed_outlier_boxplot 

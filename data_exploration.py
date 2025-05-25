@@ -16,16 +16,39 @@ import polars.selectors as cs
 from prettytable import PrettyTable
 import re
 import json
+from utils.pipeline_helpers import StepMetadataLogger, configure_logging
+from utils.stats_and_plotting import (
+    basic_stats, period_length_stats, period_length_histogram, periods_per_license_plate, period_speed_stats, period_speed_histogram,
+    period_start_end_time_distribution, period_duration_vs_speed_scatter, occupancy_status_transitions, periods_per_day_hour,
+    period_length_by_license_plate, period_start_end_map, period_start_time_vs_duration_heatmap, idle_vs_occupied_distribution,
+    cumulative_distance_per_period, speed_outlier_boxplot
+)
+import yaml
 
 OUTPUT_DIR = "explore_outputs"
 REMOVE_NULL_ROWS = False  # Set to True to drop all rows containing nulls before analysis
 
-# --- Logging Setup ---
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    stream=sys.stdout,
-)
+# Registry of all available analysis functions
+PLOT_REGISTRY = {
+    "basic_stats": basic_stats,
+    "period_length_stats": period_length_stats,
+    "period_length_histogram": period_length_histogram,
+    "periods_per_license_plate": periods_per_license_plate,
+    "period_speed_stats": period_speed_stats,
+    "period_speed_histogram": period_speed_histogram,
+    "period_start_end_time_distribution": period_start_end_time_distribution,
+    "period_duration_vs_speed_scatter": period_duration_vs_speed_scatter,
+    "occupancy_status_transitions": occupancy_status_transitions,
+    "periods_per_day_hour": periods_per_day_hour,
+    "period_length_by_license_plate": period_length_by_license_plate,
+    "period_start_end_map": period_start_end_map,
+    "period_start_time_vs_duration_heatmap": period_start_time_vs_duration_heatmap,
+    "idle_vs_occupied_distribution": idle_vs_occupied_distribution,
+    "cumulative_distance_per_period": cumulative_distance_per_period,
+    "speed_outlier_boxplot": speed_outlier_boxplot,
+}
+
+configure_logging()
 
 # --- Utility Functions ---
 def ensure_dir(path):
@@ -203,64 +226,67 @@ TASKS = {
     # To use timeseries, pass --tasks timeseries --time-col <col> --value-col <col>
 }
 
-# --- Main ---
+def load_config(config_path):
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f)
+
 def main():
     global OUTPUT_DIR
-    parser = argparse.ArgumentParser(description="Data Exploration Script")
-    parser.add_argument("--input", "-i", default="data/merged_all.parquet", help="Input Parquet file, comma-separated list of files, or directory")
+    parser = argparse.ArgumentParser(description="Data Exploration Script (YAML-configurable)")
+    parser.add_argument("--config", type=str, default="period_analysis.yaml", help="YAML config file for period analysis")
     parser.add_argument("--output-dir", "-o", default=OUTPUT_DIR, help="Output directory")
-    parser.add_argument("--tasks", "-t", nargs="*", help="Tasks to run (default: all)")
-    parser.add_argument("--time-col", type=str, help="Time column for timeseries task")
-    parser.add_argument("--value-col", type=str, help="Value column for timeseries task")
+    parser.add_argument("--period-dir", type=str, default="data/steps_data/01_segment_periods/", help="Directory with period-segmented parquet files")
     args = parser.parse_args()
 
     OUTPUT_DIR = args.output_dir
+    ensure_dir(OUTPUT_DIR)
 
-    if is_nonempty_dir(OUTPUT_DIR):
-        logging.warning(f"WARNING: Output directory '{OUTPUT_DIR}' already exists and is not empty.")
-        logging.warning("To proceed and overwrite previous outputs, type OVERWRITE and press Enter.")
-        user_input = input("Type OVERWRITE to continue: ")
-        if user_input.strip() != "OVERWRITE":
-            logging.warning("Aborting to prevent accidental overwrite.")
-            sys.exit(1)
+    # Load config
+    config = load_config(args.config)
+    columns = config.get('columns', {})
+    plots = config.get('plots', [])
 
-    # Determine input files
-    input_arg = args.input
-    input_files = []
-    if os.path.isdir(input_arg):
-        # Directory: all .parquet files
-        input_files = sorted([os.path.join(input_arg, f) for f in os.listdir(input_arg) if f.endswith('.parquet')])
-    elif "," in input_arg:
-        # Comma-separated list
-        input_files = [f.strip() for f in input_arg.split(",") if f.strip()]
-    else:
-        # Single file
-        input_files = [input_arg]
+    # Aggregate all period-segmented files
+    period_files = [os.path.join(args.period_dir, f) for f in os.listdir(args.period_dir) if f.endswith('.parquet')]
+    if not period_files:
+        logging.error(f"No parquet files found in {args.period_dir}")
+        sys.exit(1)
+    lazy_frames = [pl.scan_parquet(f) for f in period_files]
+    ldf = pl.concat(lazy_frames)
+    period_outdir = os.path.join(OUTPUT_DIR, "periods")
+    ensure_dir(period_outdir)
+    metadata_logger = StepMetadataLogger(output_dir=period_outdir)
 
-    to_run = args.tasks if args.tasks else TASKS.keys()
-
-    for file_path in input_files:
-        file_base = os.path.splitext(os.path.basename(file_path))[0]
-        logging.info(f"Loading data from {file_path} (lazy mode)...")
-        load_start = time.perf_counter()
-        ldf = pl.scan_parquet(file_path)
-        load_elapsed = time.perf_counter() - load_start
-        logging.info(f"[data loading] Completed in {load_elapsed:.2f} seconds.")
-        if REMOVE_NULL_ROWS:
-            logging.info("[data cleaning] Removing all rows containing nulls before analysis.")
-            ldf = ldf.drop_nulls()
-        for task_name in to_run:
-            # For each file, output to a subdirectory named after the file
-            prev_output_dir = OUTPUT_DIR
-            OUTPUT_DIR = os.path.join(prev_output_dir, file_base)
-            if task_name == "timeseries":
-                task_timeseries(ldf, time_col=args.time_col, value_col=args.value_col)
-            elif task_name in TASKS:
-                logging.info(f"Running task: {task_name} for {file_path}")
-                TASKS[task_name](ldf)
-            else:
-                logging.warning(f"Unknown task: {task_name}")
-            OUTPUT_DIR = prev_output_dir
+    # Run all plots/stats as specified in config
+    for plot in plots:
+        if isinstance(plot, dict):
+            name = plot['name']
+            params = plot.get('params', {})
+        else:
+            name = plot
+            params = {}
+        func = PLOT_REGISTRY.get(name)
+        if not func:
+            logging.warning(f"Unknown plot/stat function: {name}")
+            continue
+        # Build argument list from config columns and any plot-specific params
+        func_args = dict(columns)
+        func_args.update(params)
+        # Always pass ldf, output_dir, metadata_logger
+        try:
+            func(ldf, period_outdir, metadata_logger=metadata_logger, **func_args)
+            logging.info(f"Ran {name}")
+        except TypeError:
+            # For legacy functions with different signatures
+            try:
+                func(ldf, period_outdir, metadata_logger)
+                logging.info(f"Ran {name} (legacy signature)")
+            except Exception as e:
+                logging.error(f"Failed to run {name}: {e}")
+        except Exception as e:
+            logging.error(f"Failed to run {name}: {e}")
+    metadata_logger.save()
+    logging.info(f"Period analysis complete. Metadata saved to {os.path.join(period_outdir, 'step_metadata.json')}")
 
 if __name__ == "__main__":
     main()
