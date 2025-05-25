@@ -1,7 +1,7 @@
 import polars as pl
 import logging
 import argparse
-from utils.pipline_helpers import configure_logging
+from utils.pipeline_helpers import configure_logging
 
 
 def main():
@@ -18,6 +18,11 @@ def main():
     logging.info(f"Loading parquet file lazily: {input_path}")
     lazy_df = pl.scan_parquet(input_path)
     logging.info(f"Schema: {lazy_df.collect_schema()}")
+    logging.info(f"Number of rows: {lazy_df.height}")
+    logging.info("Removing rows containing NANs and nulls")
+    lazy_df = lazy_df.drop_nans().drop_nulls()
+    logging.info(f"Number of rows after removing NANs and nulls: {lazy_df.height}")
+
 
 if __name__ == "__main__":
-    main() 
+    main()
