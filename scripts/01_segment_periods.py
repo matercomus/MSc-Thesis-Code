@@ -1,14 +1,16 @@
 import argparse
 import logging
-from utils.period_segmentation import segment_periods_across_parquet
-from utils.pipeline_helpers import configure_logging
+import os
+import polars as pl
+from utils.period_segmentation import segment_periods_across_parquet, clean_parquet_files
+from utils.pipeline_helpers import configure_logging, StepMetadataLogger
 
 
 def main():
     parser = argparse.ArgumentParser(description="Step 01: Segment periods of consecutive occupancy status for each license plate across parquet files.")
-    parser.add_argument('--input-dir', required=True, help='Input directory containing parquet files')
-    parser.add_argument('--output-dir', required=True, help='Output directory for processed parquet files')
-    parser.add_argument('--state-file', default='last_state.pkl', help='Path to pickle file for storing last state between files')
+    parser.add_argument('--input-dir', default='data/original/', help='Input directory containing parquet files')
+    parser.add_argument('--output-dir', default='data/steps_data/01_segment_periods/', help='Output directory for processed parquet files')
+    parser.add_argument('--state-file', default='data/steps_data/01_segment_periods/last_state.pkl', help='Path to pickle file for storing last state between files')
     parser.add_argument('--license-plate-col', default='license_plate', help='Column name for license plate')
     parser.add_argument('--occupancy-col', default='occupancy_status', help='Column name for occupancy status')
     parser.add_argument('--timestamp-col', default='timestamp', help='Column name for timestamp')
@@ -19,8 +21,45 @@ def main():
     configure_logging()
     logging.info(f"Running period segmentation: {args}")
 
+    # Create output directory if it doesn't exist
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    # Metadata logger
+    metadata_logger = StepMetadataLogger(output_dir=args.output_dir)
+
+    # Clean input files first, collect stats
+    cleaned_dir = os.path.join(args.output_dir, 'cleaned')
+    parquet_files = [f for f in os.listdir(args.input_dir) if f.endswith('.parquet')]
+    cleaning_stats = {"files": {}, "total_before": 0, "total_after": 0, "total_dropped": 0}
+    for fname in parquet_files:
+        in_path = os.path.join(args.input_dir, fname)
+        df = pl.read_parquet(in_path)
+        before = df.height
+        df = df.drop_nulls()
+        df = df.filter(~pl.any_horizontal([pl.col(col).is_nan() for col in df.columns]))
+        after = df.height
+        dropped = before - after
+        cleaning_stats["files"][fname] = {"before": before, "after": after, "dropped": dropped}
+        cleaning_stats["total_before"] += before
+        cleaning_stats["total_after"] += after
+        cleaning_stats["total_dropped"] += dropped
+        df.write_parquet(os.path.join(cleaned_dir, fname))
+    metadata_logger.add_stat("cleaning", cleaning_stats)
+    metadata_logger.log_stats()
+
+    # Segment periods, collect stats
+    segmented_stats = {"files": {}, "total_rows": 0}
+    cleaned_files = [f for f in os.listdir(cleaned_dir) if f.endswith('.parquet')]
+    for fname in cleaned_files:
+        df = pl.read_parquet(os.path.join(cleaned_dir, fname))
+        segmented_stats["files"][fname] = {"rows": df.height}
+        segmented_stats["total_rows"] += df.height
+    metadata_logger.add_stat("segmentation", segmented_stats)
+    metadata_logger.log_stats()
+
+    # Run segmentation
     segment_periods_across_parquet(
-        parquet_dir=args.input_dir,
+        parquet_dir=cleaned_dir,
         output_dir=args.output_dir,
         state_file=args.state_file,
         license_plate_col=args.license_plate_col,
@@ -29,6 +68,9 @@ def main():
         output_period_col=args.output_period_col,
         verbose=args.verbose,
     )
+
+    # Save metadata
+    metadata_logger.save()
 
 if __name__ == "__main__":
     main() 

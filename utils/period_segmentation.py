@@ -3,6 +3,26 @@ import pickle
 import glob
 import os
 from typing import Dict, Tuple, Optional
+import logging
+
+
+def clean_parquet_files(input_dir, cleaned_dir, license_plate_col, occupancy_col, timestamp_col):
+    os.makedirs(cleaned_dir, exist_ok=True)
+    parquet_files = [f for f in os.listdir(input_dir) if f.endswith('.parquet')]
+    for fname in parquet_files:
+        in_path = os.path.join(input_dir, fname)
+        out_path = os.path.join(cleaned_dir, fname)
+        df = pl.read_parquet(in_path)
+        before = df.height
+        df = df.drop_nulls()
+        df = df.filter(~pl.any_horizontal([pl.col(col).is_nan() for col in df.columns]))
+        after = df.height
+        dropped = before - after
+        if dropped > 0:
+            logging.warning(f"[CLEAN] Dropped {dropped} rows with null or NaN values in {fname}.")
+        else:
+            logging.info(f"[CLEAN] No null or NaN rows dropped in {fname}.")
+        df.write_parquet(out_path)
 
 
 def segment_periods_across_parquet(
@@ -43,8 +63,7 @@ def segment_periods_across_parquet(
     parquet_files = sorted(glob.glob(os.path.join(parquet_dir, "*.parquet")))
 
     for parquet_file in parquet_files:
-        if verbose:
-            print(f"Processing {parquet_file} ...")
+        logging.info(f"Processing {parquet_file} ...")
         # Load file lazily
         lazy_df = pl.scan_parquet(parquet_file)
         # Sort by license_plate and timestamp
@@ -74,10 +93,9 @@ def segment_periods_across_parquet(
         # Save processed file
         out_path = os.path.join(output_dir, os.path.basename(parquet_file))
         df.write_parquet(out_path)
+        logging.info(f"Saved {out_path} and updated state.")
 
         # Save last state after each file
         with open(state_file, "wb") as f:
             pickle.dump(last_state, f)
-
-        if verbose:
-            print(f"Saved {out_path} and updated state.") 
+        logging.debug(f"State saved to {state_file}.") 
