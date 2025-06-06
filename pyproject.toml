@@ -10,6 +10,9 @@ dependencies = [
     "scikit-learn>=1.0.0",
     # Required for threshold analysis plots
     "matplotlib>=3.0.0",
+    "polars>=1.30.0",
+    "psutil>=7.0.0",
+    "tqdm>=4.67.1",
 ]
 
 [tool.marimo.experimental]

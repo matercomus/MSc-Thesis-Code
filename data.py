@@ -6,15 +6,12 @@ Converts large CSV files to Parquet format efficiently using Polars
 from pathlib import Path
 import time
 import polars as pl
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 import argparse
 import glob
 import os
-import psutil
-from concurrent.futures import ProcessPoolExecutor, as_completed
 import logging
 from tqdm import tqdm
-import sys
 import csv
 
 # --------------------------
@@ -23,22 +20,41 @@ import csv
 
 # Columns to focus on (target names)
 TARGET_COLUMNS = [
-    "license_plate",      # VehicleNum (2nd column)
-    "timestamp",        # Time (3rd column)
-    "longitude",        # Lng (4th column)
-    "latitude",         # Lat (5th column)
-    "instant_speed",    # Speed (6th column)
-    "occupancy_status", # OpenStatus (7th column)
+    "company_code",      # QH (1st column)
+    "vehicle_number",    # VehicleNum (2nd column)
+    "plate_number",      # License plate (3rd column)
+    "timestamp",         # Time (4th column)
+    "longitude",         # Lng (5th column)
+    "latitude",          # Lat (6th column)
+    "instant_speed",     # Speed (7th column)
+    "occupancy_status",  # OpenStatus (8th column)
+    "status",           # Status (last column)
+]
+
+# Original column names in the CSV files (no headers)
+CSV_COLUMNS = [
+    "QH",           # Company code
+    "VehicleNum",   # Vehicle number
+    "PlateNum",     # License plate
+    "Time",         # Timestamp
+    "Lng",          # Longitude
+    "Lat",          # Latitude
+    "Speed",        # Speed
+    "OpenStatus",   # Occupancy status
+    "Status",       # Status (N or CZ)
 ]
 
 # Mapping from CSV header to target column names
 CSV_TO_TARGET = {
-    "VehicleNum": "license_plate",
+    "QH": "company_code",
+    "VehicleNum": "vehicle_number",
+    "PlateNum": "plate_number",
     "Time": "timestamp",
     "Lng": "longitude",
     "Lat": "latitude",
     "Speed": "instant_speed",
-    "OpenStatus": "occupancy_status"
+    "OpenStatus": "occupancy_status",
+    "Status": "status"
 }
 
 # --------------------------
@@ -71,6 +87,38 @@ def clean_up_on_failure(out_path: Path) -> None:
 # --------------------------
 
 
+def detect_csv_structure(csv_path: str) -> tuple:
+    """Detect CSV structure using Polars"""
+    try:
+        # Try reading without headers first
+        df = pl.read_csv(
+            csv_path,
+            n_rows=5,
+            has_header=False,
+            encoding='utf-8'
+        )
+        n_cols = len(df.columns)
+        
+        # If we have the expected number of columns, use our predefined names
+        if n_cols == len(CSV_COLUMNS):
+            return CSV_COLUMNS, False
+            
+        # Try reading with headers
+        df_with_header = pl.read_csv(
+            csv_path,
+            n_rows=0,
+            has_header=True,
+            encoding='utf-8'
+        )
+        if len(df_with_header.columns) > 0:
+            return list(df_with_header.columns), True
+            
+        raise ValueError(f"Could not detect CSV structure for {csv_path}")
+    except Exception as e:
+        logging.error(f"Error detecting CSV structure: {e}")
+        raise
+
+
 def perform_conversion(
     input_path: Path,
     out_path: Path,
@@ -79,22 +127,30 @@ def perform_conversion(
 ) -> pl.LazyFrame:
     """Core conversion logic using Polars"""
     columns_to_keep = columns_to_keep or TARGET_COLUMNS
+    
     # Define dtypes for each column
     DTYPES = {
+        "QH": pl.Utf8,  # Taxi company code
         "VehicleNum": pl.Utf8,
+        "PlateNum": pl.Utf8,
         "Time": pl.Utf8,  # parse as string, can convert to datetime later if needed
         "Lng": pl.Float64,
         "Lat": pl.Float64,
         "Speed": pl.Float64,
         "OpenStatus": pl.Int64,
+        "Status": pl.Utf8,
     }
+    
     scan = pl.scan_csv(
         input_path,
-        has_header=True,
+        has_header=False,
+        new_columns=CSV_COLUMNS,
         null_values=["N", "n", ""],
         ignore_errors=False,
         schema_overrides=DTYPES,
+        encoding='utf8'  # Changed from utf-8 to utf8
     ).rename(CSV_TO_TARGET)
+    
     scan = scan.select(columns_to_keep)
     return scan
 

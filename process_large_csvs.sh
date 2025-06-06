@@ -22,35 +22,48 @@ log() {
 
 log "==== Starting batch CSV to Parquet processing ===="
 
-for f in "$SRC_DIR"/*_区域内.csv; do
-    fname=$(basename "$f")
-    dest_csv="$DEST_DIR/$fname"
-    parquet_out="$PARQUET_DIR/${fname%.csv}.parquet"
+# Generate dates from 2019.11.25 to 2019.12.01
+start_date="2019-11-25"
+end_date="2019-12-01"
+current_date="$start_date"
 
-    log "--- Processing: $fname ---"
-    log "Copying $f to $dest_csv using rsync..."
-    if rsync -ah --progress "$f" "$dest_csv" 2>&1 | tee -a "$LOG_FILE"; then
-        log "Copy complete: $dest_csv"
-    else
-        log "ERROR: Failed to copy $f. Skipping."
-        continue
-    fi
+while [[ "$current_date" < "$end_date" || "$current_date" == "$end_date" ]]; do
+    date_str=$(date -d "$current_date" +"%Y.%m.%d")
+    f="$SRC_DIR/${date_str}.csv"
+    if [[ -f "$f" ]]; then
+        fname=$(basename "$f")
+        dest_csv="$DEST_DIR/$fname"
+        parquet_out="$PARQUET_DIR/${fname%.csv}.parquet"
 
-    log "File size: $(du -h "$dest_csv" | cut -f1)"
-    start_time=$(date +%s)
-    log "Converting $dest_csv to Parquet..."
-    if python3 "$PY_SCRIPT" "$dest_csv" --output-dir "$PARQUET_DIR" 2>&1 | tee -a "$LOG_FILE"; then
-        end_time=$(date +%s)
-        duration=$((end_time - start_time))
-        log "Conversion complete: $parquet_out (Duration: ${duration}s)"
-        log "Parquet size: $(du -h "$parquet_out" | cut -f1)"
-        rm -f "$dest_csv"
-        log "Deleted $dest_csv to save space."
+        log "--- Processing: $fname ---"
+        log "Copying $f to $dest_csv using rsync..."
+        if rsync -ah --progress "$f" "$dest_csv" 2>&1 | tee -a "$LOG_FILE"; then
+            log "Copy complete: $dest_csv"
+        else
+            log "ERROR: Failed to copy $f. Skipping."
+            current_date=$(date -I -d "$current_date + 1 day")
+            continue
+        fi
+
+        log "File size: $(du -h "$dest_csv" | cut -f1)"
+        start_time=$(date +%s)
+        log "Converting $dest_csv to Parquet..."
+        if python3 "$PY_SCRIPT" "$dest_csv" --output-dir "$PARQUET_DIR" 2>&1 | tee -a "$LOG_FILE"; then
+            end_time=$(date +%s)
+            duration=$((end_time - start_time))
+            log "Conversion complete: $parquet_out (Duration: ${duration}s)"
+            log "Parquet size: $(du -h "$parquet_out" | cut -f1)"
+            rm -f "$dest_csv"
+            log "Deleted $dest_csv to save space."
+        else
+            log "ERROR: Conversion failed for $dest_csv. Keeping file for inspection."
+        fi
+        log "--- Done with: $fname ---"
+        log ""
     else
-        log "ERROR: Conversion failed for $dest_csv. Keeping file for inspection."
+        log "File not found: $f. Skipping."
     fi
-    log "--- Done with: $fname ---"
-    log ""
+    current_date=$(date -I -d "$current_date + 1 day")
 done
 
 log "==== All files processed ====" 
