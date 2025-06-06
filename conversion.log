@@ -1,0 +1,17 @@
+ï»¿2025-06-06 18:13:00,662 - INFO - Converting I:\ï¿½ï¿½ï¿½ï¿½ï¿½Ð³ï¿½ï¿½â³µGPSï¿½ï¿½ï¿½ï¿½\2019.11.25.csv to I:\ï¿½ï¿½ï¿½ï¿½ï¿½Ð³ï¿½ï¿½â³µGPSï¿½ï¿½ï¿½ï¿½\2019.11.25.parquet
+2025-06-06 18:15:16,862 - INFO - Conversion completed in 136.20 seconds
+2025-06-06 18:15:16,862 - INFO - Converting I:\ï¿½ï¿½ï¿½ï¿½ï¿½Ð³ï¿½ï¿½â³µGPSï¿½ï¿½ï¿½ï¿½\2019.11.26.csv to I:\ï¿½ï¿½ï¿½ï¿½ï¿½Ð³ï¿½ï¿½â³µGPSï¿½ï¿½ï¿½ï¿½\2019.11.26.parquet
+2025-06-06 18:21:55,177 - INFO - Converting I:\±±¾©ÊÐ³ö×â³µGPSÊý¾Ý\2019.11.25.csv to C:\Users\matt\Dev\MSc-Thesis-Code\data\parquet\2019.11.25.parquet
+2025-06-06 18:23:34,382 - INFO - Conversion completed in 99.21 seconds
+2025-06-06 18:23:34,382 - INFO - Converting I:\±±¾©ÊÐ³ö×â³µGPSÊý¾Ý\2019.11.26.csv to C:\Users\matt\Dev\MSc-Thesis-Code\data\parquet\2019.11.26.parquet
+2025-06-06 18:25:27,181 - INFO - Conversion completed in 112.80 seconds
+2025-06-06 18:25:27,181 - INFO - Converting I:\±±¾©ÊÐ³ö×â³µGPSÊý¾Ý\2019.11.27.csv to C:\Users\matt\Dev\MSc-Thesis-Code\data\parquet\2019.11.27.parquet
+2025-06-06 18:27:08,761 - INFO - Conversion completed in 101.58 seconds
+2025-06-06 18:27:08,761 - INFO - Converting I:\±±¾©ÊÐ³ö×â³µGPSÊý¾Ý\2019.11.28.csv to C:\Users\matt\Dev\MSc-Thesis-Code\data\parquet\2019.11.28.parquet
+2025-06-06 18:28:53,998 - INFO - Conversion completed in 105.24 seconds
+2025-06-06 18:28:53,998 - INFO - Converting I:\±±¾©ÊÐ³ö×â³µGPSÊý¾Ý\2019.11.29.csv to C:\Users\matt\Dev\MSc-Thesis-Code\data\parquet\2019.11.29.parquet
+2025-06-06 18:30:31,924 - INFO - Conversion completed in 97.93 seconds
+2025-06-06 18:30:31,924 - INFO - Converting I:\±±¾©ÊÐ³ö×â³µGPSÊý¾Ý\2019.11.30.csv to C:\Users\matt\Dev\MSc-Thesis-Code\data\parquet\2019.11.30.parquet
+2025-06-06 18:32:06,466 - INFO - Conversion completed in 94.54 seconds
+2025-06-06 18:32:06,466 - INFO - Converting I:\±±¾©ÊÐ³ö×â³µGPSÊý¾Ý\2019.12.01.csv to C:\Users\matt\Dev\MSc-Thesis-Code\data\parquet\2019.12.01.parquet
+2025-06-06 18:33:35,303 - INFO - Conversion completed in 88.84 seconds

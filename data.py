@@ -6,55 +6,29 @@ Converts large CSV files to Parquet format efficiently using Polars
 from pathlib import Path
 import time
 import polars as pl
-from typing import Optional, List
-import argparse
+from typing import Optional
 import glob
 import os
 import logging
-from tqdm import tqdm
 import csv
 
 # --------------------------
 # Column Definitions
 # --------------------------
 
-# Columns to focus on (target names)
-TARGET_COLUMNS = [
-    "company_code",      # QH (1st column)
-    "vehicle_number",    # VehicleNum (2nd column)
-    "plate_number",      # License plate (3rd column)
-    "timestamp",         # Time (4th column)
-    "longitude",         # Lng (5th column)
-    "latitude",          # Lat (6th column)
-    "instant_speed",     # Speed (7th column)
-    "occupancy_status",  # OpenStatus (8th column)
-    "status",           # Status (last column)
-]
-
-# Original column names in the CSV files (no headers)
-CSV_COLUMNS = [
-    "QH",           # Company code
-    "VehicleNum",   # Vehicle number
-    "PlateNum",     # License plate
-    "Time",         # Timestamp
-    "Lng",          # Longitude
-    "Lat",          # Latitude
-    "Speed",        # Speed
-    "OpenStatus",   # Occupancy status
-    "Status",       # Status (N or CZ)
-]
-
-# Mapping from CSV header to target column names
-CSV_TO_TARGET = {
-    "QH": "company_code",
-    "VehicleNum": "vehicle_number",
-    "PlateNum": "plate_number",
-    "Time": "timestamp",
-    "Lng": "longitude",
-    "Lat": "latitude",
-    "Speed": "instant_speed",
-    "OpenStatus": "occupancy_status",
-    "Status": "status"
+# Define schema with all columns as strings to avoid parsing errors
+SCHEMA = {
+    'company': pl.String,
+    'phone': pl.String,
+    'plate': pl.String,
+    'timestamp': pl.String,
+    'longitude': pl.String,
+    'latitude': pl.String,
+    'speed': pl.String,
+    'direction': pl.String,
+    'status': pl.String,
+    'angle': pl.String,
+    'status_code': pl.String
 }
 
 # --------------------------
@@ -70,9 +44,14 @@ def validate_input_file(csv_path: str) -> Path:
     return input_path
 
 
-def determine_output_path(csv_path: Path, output_path: Optional[str]) -> Path:
-    """Determine output path (defaults to same as input with .parquet extension)"""
-    return Path(output_path) if output_path else csv_path.with_suffix(".parquet")
+def determine_output_path(csv_path: Path) -> Path:
+    """Determine output path in the parquet directory"""
+    # Create output directory if it doesn't exist
+    output_dir = Path(r"C:\Users\matt\Dev\MSc-Thesis-Code\data\parquet")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Use the same filename but with .parquet extension
+    return output_dir / f"{csv_path.stem}.parquet"
 
 
 def clean_up_on_failure(out_path: Path) -> None:
@@ -87,77 +66,32 @@ def clean_up_on_failure(out_path: Path) -> None:
 # --------------------------
 
 
-def detect_csv_structure(csv_path: str) -> tuple:
-    """Detect CSV structure using Polars"""
-    try:
-        # Try reading without headers first
-        df = pl.read_csv(
-            csv_path,
-            n_rows=5,
-            has_header=False,
-            encoding='utf-8'
-        )
-        n_cols = len(df.columns)
-        
-        # If we have the expected number of columns, use our predefined names
-        if n_cols == len(CSV_COLUMNS):
-            return CSV_COLUMNS, False
-            
-        # Try reading with headers
-        df_with_header = pl.read_csv(
-            csv_path,
-            n_rows=0,
-            has_header=True,
-            encoding='utf-8'
-        )
-        if len(df_with_header.columns) > 0:
-            return list(df_with_header.columns), True
-            
-        raise ValueError(f"Could not detect CSV structure for {csv_path}")
-    except Exception as e:
-        logging.error(f"Error detecting CSV structure: {e}")
-        raise
-
-
 def perform_conversion(
     input_path: Path,
     out_path: Path,
-    compression: str,
-    columns_to_keep: Optional[List[str]] = None,
-) -> pl.LazyFrame:
-    """Core conversion logic using Polars"""
-    columns_to_keep = columns_to_keep or TARGET_COLUMNS
-    
-    # Define dtypes for each column
-    DTYPES = {
-        "QH": pl.Utf8,  # Taxi company code
-        "VehicleNum": pl.Utf8,
-        "PlateNum": pl.Utf8,
-        "Time": pl.Utf8,  # parse as string, can convert to datetime later if needed
-        "Lng": pl.Float64,
-        "Lat": pl.Float64,
-        "Speed": pl.Float64,
-        "OpenStatus": pl.Int64,
-        "Status": pl.Utf8,
-    }
-    
-    scan = pl.scan_csv(
-        input_path,
-        has_header=False,
-        new_columns=CSV_COLUMNS,
-        null_values=["N", "n", ""],
-        ignore_errors=False,
-        schema_overrides=DTYPES,
-        encoding='utf8'  # Changed from utf-8 to utf8
-    ).rename(CSV_TO_TARGET)
-    
-    scan = scan.select(columns_to_keep)
-    return scan
-
-
-def write_parquet(scan: pl.LazyFrame, out_path: Path, compression: str) -> None:
-    """Write the final parquet file"""
-    scan.sink_parquet(out_path, compression=compression)
+    compression: str = 'zstd'
+) -> None:
+    """Core conversion logic using Polars scanning"""
+    try:
+        # Scan CSV with error handling
+        scan = pl.scan_csv(
+            input_path,
+            has_header=False,
+            encoding='utf8',
+            schema=SCHEMA,
+            ignore_errors=True  # Skip rows with parsing errors
+        )
+        
+        # Write to parquet
+        scan.sink_parquet(
+            out_path,
+            compression=compression
+        )
+        
+    except Exception as e:
+        logging.error(f"Error converting {input_path}: {e}")
+        clean_up_on_failure(out_path)
+        raise
 
 
 # --------------------------
@@ -229,7 +163,7 @@ def convert_one_file(args):
         with open(csv_path, newline='', encoding='utf-8') as f:
             reader = csv.reader(f)
             header = next(reader)
-        required = set(CSV_TO_TARGET.keys())
+        required = set(SCHEMA.keys())
         missing = required - set(header)
         if missing:
             msg = f"Missing required columns in {csv_path}: {missing}"
@@ -237,8 +171,7 @@ def convert_one_file(args):
             stats['error'] = msg
             return stats
         before_size = get_file_size(csv_path)
-        scan = perform_conversion(Path(csv_path), Path(output_path), compression, TARGET_COLUMNS)
-        write_parquet(scan, Path(output_path), compression)
+        perform_conversion(Path(csv_path), Path(output_path), compression)
         after_size = get_file_size(output_path)
         duration = time.time() - start_time
         stats.update({
@@ -260,44 +193,43 @@ def convert_one_file(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Batch CSV to Parquet converter for taxi data.")
-    parser.add_argument('inputs', nargs='+', help="Input CSV files, globs, or directories.")
-    parser.add_argument('--output-dir', '-o', default=None, help="Output directory for Parquet files.")
-    parser.add_argument('--compression', default='zstd', help="Parquet compression (zstd, snappy, gzip, lz4). Default: zstd")
-    args = parser.parse_args()
-
-    files = find_csv_files(args.inputs)
-    if not files:
-        print("No input files found.")
-        return
-
-    if args.output_dir:
-        os.makedirs(args.output_dir, exist_ok=True)
-        outputs = [os.path.join(args.output_dir, os.path.splitext(os.path.basename(f))[0] + '.parquet') for f in files]
-    else:
-        outputs = [os.path.splitext(f)[0] + '.parquet' for f in files]
-
-    print(f"Found {len(files)} files. Processing sequentially.")
-    print(f"Compression: {args.compression}")
-
-    results = []
-    for csv_path, output_path in tqdm(zip(files, outputs), total=len(files), desc="Files"):
-        res = convert_one_file((csv_path, output_path, args.compression))
-        results.append(res)
-        if res['ok']:
-            print(f"[OK] {res['csv']} -> {res['parquet']} | {res['before_size']//1024**2}MB -> {res['after_size']//1024**2}MB | ratio: {res['ratio']:.2f} | {res['duration']:.1f}s | {res['throughput']:.1f} MB/s")
-        else:
-            print(f"[FAIL] {res['csv']} | {res['error']}")
-
-    # Summary
-    ok = [r for r in results if r.get('ok')]
-    print("\nSummary:")
-    print(f"Converted: {len(ok)}/{len(results)} files successfully.")
-    if ok:
-        total_in = sum(r['before_size'] for r in ok)
-        total_out = sum(r['after_size'] for r in ok)
-        total_time = sum(r['duration'] for r in ok)
-        print(f"Total input: {total_in//1024**3} GB, output: {total_out//1024**3} GB, ratio: {total_out/total_in:.2f}, total time: {total_time:.1f}s, avg throughput: {total_in/total_time/1024**2:.1f} MB/s")
+    # Setup logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler('conversion.log'),
+            logging.StreamHandler()
+        ]
+    )
+    
+    # Process files one by one
+    base_path = r"I:\北京市出租车GPS数据"
+    files = sorted([
+        f"{base_path}\\2019.11.25.csv",
+        f"{base_path}\\2019.11.26.csv",
+        f"{base_path}\\2019.11.27.csv",
+        f"{base_path}\\2019.11.28.csv",
+        f"{base_path}\\2019.11.29.csv",
+        f"{base_path}\\2019.11.30.csv",
+        f"{base_path}\\2019.12.01.csv"
+    ])
+    
+    for csv_file in files:
+        try:
+            start_time = time.time()
+            input_path = validate_input_file(csv_file)
+            output_path = determine_output_path(input_path)
+            
+            logging.info(f"Converting {input_path} to {output_path}")
+            perform_conversion(input_path, output_path)
+            
+            duration = time.time() - start_time
+            logging.info(f"Conversion completed in {duration:.2f} seconds")
+            
+        except Exception as e:
+            logging.error(f"Failed to process {csv_file}: {e}")
+            continue
 
 if __name__ == "__main__":
     main()
